@@ -1,10 +1,13 @@
 // Desktop keyboard shortcuts (physical key positions, so they work on AZERTY/QWERTZ too):
 //   Deck A: Q play, W cue (hold), E sync, 1-4 loops 1/2/4/8.  Deck B: P play, O cue (hold), I sync, 7-0 loops.
 //   Arrow left/right: crossfader (Shift = fine).  M: Auto Mix on / off.  Escape: close the open panel.
+//   Music player: Space play / pause (only while the player page is open, and never when a focused button,
+//   switch or slider uses Space itself), N next song, B previous song (while the player page is open or the
+//   queue plays).
 // Keys are never taken while a text field has focus, with modifier keys held, or while a dialog is open.
 //   const off = bindKeyboard(app);
 
-import { isTypingTarget } from './dom.js';
+import { isTypingTarget, usesSpaceKey } from './dom.js';
 
 const LOOP_KEYS = {
   Digit1: [0, 1], Digit2: [0, 2], Digit3: [0, 4], Digit4: [0, 8],
@@ -12,7 +15,8 @@ const LOOP_KEYS = {
 };
 
 /**
- * @param {object} app AppUI: decks, sync, dialog, sheets, setCrossfader(), xfade, startOverlayVisible
+ * @param {object} app AppUI: decks, sync, dialog, sheets, setCrossfader(), xfade, startOverlayVisible, automix,
+ *   toggleAutomix(), player, page, playerToggle(), playerNext(), playerPrevious(), playerKeysActive()
  * @returns {Function} unbind
  */
 export function bindKeyboard(app) {
@@ -53,6 +57,19 @@ export function bindKeyboard(app) {
       case 'KeyM':
         if (!app.automix) handled = false;
         else if (!e.repeat) app.toggleAutomix();
+        break;
+      case 'Space':
+        // the player page only; a focused button / switch / slider keeps Space for itself
+        if (!app.player || app.page !== 'player' || usesSpaceKey(e.target)) handled = false;
+        else if (!e.repeat) app.playerToggle();
+        break;
+      case 'KeyN':
+      case 'KeyB':
+        if (!app.player || typeof app.playerKeysActive !== 'function' || !app.playerKeysActive()) handled = false;
+        else if (!e.repeat) {
+          if (code === 'KeyN') app.playerNext();
+          else app.playerPrevious();
+        }
         break;
       case 'ArrowLeft':
       case 'ArrowRight': {

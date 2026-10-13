@@ -1,7 +1,7 @@
 // Settings sheet: every user setting in plain words (tempo range, crossfader curve, quantize, vinyl mode, auto
-// sync, Auto Mix length / ease back / bass swap, keep screen awake, haptics, time display, waveform zoom, outdoor
-// contrast), Restart audio, tips, reset, and an About / diagnostics block (engine.diagnostics(), feature flags,
-// layout, build).
+// sync, Auto Mix transition / length / ease back / bass swap, keep screen awake, haptics, time display, waveform
+// zoom, outdoor contrast), Restart audio, tips, reset, and an About / diagnostics block (engine.diagnostics(),
+// feature flags, layout, build).
 //   host.push(settingsSheet(app));
 
 import { h, icon, setKids } from '../dom.js';
@@ -9,6 +9,7 @@ import { section, note, switchRow, segmented, navRow } from './sheet.js';
 import { env } from '../../core/env.js';
 import { fmtRange, waveSeconds, ZOOM_STEPS } from '../format.js';
 import { formatDiagnostics } from '../app-info.js';
+import { TRANSITIONS } from '../player-text.js';
 
 const KEEP_ON_RESET = ['outputMode', 'masterDeviceId', 'cueDeviceId', 'alignmentMs', 'splitSwap', 'remoteBus', 'tipsSeen', 'setList'];
 
@@ -59,6 +60,13 @@ export function settingsSheet(app) {
         s.get('automixReturn'), (on) => set('automixReturn', on));
       const bassSwap = switchRow('Bass swap', 'Half way through a mix the bass moves from the old song to the new one, so the two never clash.',
         s.get('automixBassSwap'), (on) => set('automixBassSwap', on));
+      // the queue's transition style (also on the PLAYER page, with the crossfade length)
+      const trans = segmented('Transition', TRANSITIONS.map((t) => ({ value: t.value, label: t.label })), s.get('transitionStyle'),
+        (v) => {
+          const p = app.player;
+          if (p && typeof p.setTransition === 'function') safe(() => p.setTransition(v));
+          else set('transitionStyle', v);
+        }, { detail: 'How the queue moves from song to song: DJ mix beat-matches, Crossfade fades (its length is on the player page), Gapless starts the next song the moment one ends.' });
 
       // Screen
       const zoomVal = h('span.row-value');
@@ -135,7 +143,7 @@ export function settingsSheet(app) {
       setKids(body,
         section('Decks', ...rows),
         section('Mixer', curve.el),
-        app.automix ? section('Auto Mix', mixLen.el, easeBack.el, bassSwap.el) : null,
+        app.automix ? section('Auto Mix', trans.el, mixLen.el, easeBack.el, bassSwap.el) : null,
         section('Screen', ...screenRows),
         section('Audio', restart.el,
           note('Outputs, headphones and volumes are in the Outputs panel.')),

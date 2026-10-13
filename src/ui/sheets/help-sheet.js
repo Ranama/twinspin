@@ -1,5 +1,5 @@
 // Help sheet: a plain-language guide to TwinSpin (quick start, decks, records, CUE vs headphones, SYNC, mixer,
-// Auto Mix and the set list, FX and loops, outputs for this kind of device, keyboard shortcuts,
+// Auto Mix and the set list, the music player, FX and loops, outputs for this kind of device, keyboard shortcuts,
 // troubleshooting). Static content.
 //   host.push(helpSheet(app));
 
@@ -12,10 +12,14 @@ const KEYS = [
   ['← →', 'Move the crossfader (Shift = small steps)'],
   ['1 2 3 4', 'Deck A loop: 1, 2, 4, 8 beats'], ['7 8 9 0', 'Deck B loop: 1, 2, 4, 8 beats'],
   ['M', 'Auto Mix on / off'],
+  ['Space', 'Player: play / pause (while the player is open)'],
+  ['N', 'Player: next song'],
+  ['B', 'Player: previous song (or the start of this one)'],
   ['Esc', 'Close a panel'],
 ];
 
-export function helpSheet() {
+export function helpSheet(app) {
+  const hasPlayer = !!(app && app.player);
   return {
     id: 'help',
     title: 'Help',
@@ -45,7 +49,11 @@ export function helpSheet() {
           ]),
         ];
 
-      const kbd = h('table.help-keys', {}, h('tbody', {}, KEYS.map(([k, what]) => h('tr', {}, h('th', {}, h('kbd', { text: k })), h('td', { text: what })))));
+      const keys = hasPlayer ? KEYS : KEYS.filter(([k]) => !['Space', 'N', 'B'].includes(k));
+      const kbd = h('table.help-keys', {}, h('tbody', {}, keys.map(([k, what]) => h('tr', {}, h('th', {}, h('kbd', { text: k })), h('td', { text: what })))));
+      const where = phone
+        ? 'Open PLAYER in the tab bar (in landscape: the PLAYER button over the waveforms).'
+        : 'Open PLAYER at the top (on a tablet: in the tab bar; on a phone in landscape: the button over the waveforms).';
 
       setKids(body,
         topic('Quick start', 'play',
@@ -88,6 +96,16 @@ export function helpSheet() {
             'Mix length (16, 32 or 64 beats), easing back to the original tempo and the bass swap are in Settings.',
             'Touch the crossfader or a control of the deck that is being mixed and Auto Mix hands the mix over to you. Switch it on again when you want.',
           ])),
+        hasPlayer ? topic('Music player', 'player',
+          `The player is a simple music app on top of the set list: the set list is its queue. ${where}`,
+          list([
+            'Press play: the queue starts (Auto Mix switches on) and moves from song to song by itself. Pause keeps your place.',
+            'Pick how songs change: DJ mix (beat-matched, like a DJ), Crossfade (a plain fade of 2 to 12 seconds) or Gapless (the next song starts right when one ends).',
+            'Shuffle plays the songs up next in random order; repeat goes off, all (the queue starts again) or one (this song again).',
+            'Up next: drag the handle to change the order, x removes a song, tap a song to play it now. History lists what played.',
+            'On the Songs page, + adds a song to the end of the queue; ⋯ has Play now and Play next.',
+            'On the DECKS page the strip shows what comes next, with previous, play / pause and next. Tap it to open the player.',
+          ])) : null,
         topic('Effects and loops', 'fx',
           list([
             'Tap an effect pad to switch it on, tap again to switch it off. Hold a pad to use it only while you hold.',

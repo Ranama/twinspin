@@ -7,7 +7,8 @@
 // the placement; these numbers only size the rows and the platter (--P) so nothing has to be solved with long
 // calc() chains, and so the phone portrait layout fits 360 x 560 CSS px without scrolling, also with the Auto
 // Mix status strip (computeSizes(..., { am: true }), automixPlacement). The console FX row has two or three rows
-// of pads depending on the deck column width (fxRows -> #app[data-fxrows]).
+// of pads depending on the deck column width (fxRows -> #app[data-fxrows]). The music player page (docs/PLAYER.md)
+// gets its box and arrangement from playerBox / playerLayout, and the strip's mini transport from stripFit.
 
 import { clamp } from '../core/util.js';
 
@@ -58,22 +59,29 @@ export function knobStyle(layout) {
   return layout === 'pp' || layout === 'pl' ? 'bar' : 'rotary';
 }
 
+/** Every page name the app knows ('player' is the music player page, docs/PLAYER.md section 5). */
+export const PAGES = Object.freeze(['decks', 'mix', 'fx', 'songs', 'player']);
+
 /**
  * Normalise the page the phone/tablet layouts show in their swappable area.
- * pp: decks | mix | fx | songs. tp and pl always show the decks, so 'decks' means the mixer there.
- * console shows everything; only 'songs' (the library drawer) is meaningful.
+ * pp: decks | mix | fx | songs | player. tp and pl always show the decks (except on the player page, which takes
+ * the whole screen), so 'decks' means the mixer there. console shows everything; only 'songs' (the library
+ * drawer) and 'player' (the player drawer) are meaningful.
  */
 export function effectivePage(layout, page) {
-  const p = page === 'mix' || page === 'fx' || page === 'songs' || page === 'decks' ? page : 'decks';
+  const p = PAGES.includes(page) ? page : 'decks';
   if (layout === 'pp') return p;
-  if (layout === 'console') return p === 'songs' ? 'songs' : 'mix';
+  if (layout === 'console') return p === 'songs' || p === 'player' ? p : 'mix';
   return p === 'decks' ? 'mix' : p;
 }
 
-/** The tabs a layout shows (empty when the layout has no tab bar). */
+/**
+ * The tabs a layout shows (empty when the layout has no tab bar). At most five: the PLAYER tab takes the place
+ * the AUTO MIX switch had on phones (AppUI hides it when there is no Player, and the switch comes back).
+ */
 export function tabsFor(layout) {
-  if (layout === 'pp') return ['decks', 'mix', 'fx', 'songs'];
-  if (layout === 'tp') return ['mix', 'fx', 'songs'];
+  if (layout === 'pp') return ['decks', 'mix', 'fx', 'songs', 'player'];
+  if (layout === 'tp') return ['mix', 'fx', 'songs', 'player'];
   return [];
 }
 
@@ -295,42 +303,148 @@ export function stackHeight(s) {
 
 /**
  * Which sections are shown for a layout, page and FX target. AppUI applies this with the `hidden` attribute;
- * CSS only places what is visible.
- * @returns {{decks:boolean, mixer:boolean, fxA:boolean, fxB:boolean, songs:boolean, waves:boolean, tabs:boolean,
- *            xf:boolean}}
+ * CSS only places what is visible. The player page takes the whole screen between the header and the tab bar
+ * on phones and tablets (pl: the header spans the width); on the console it is a drawer like the songs.
+ * @returns {{decks:boolean, mixer:boolean, fxA:boolean, fxB:boolean, songs:boolean, player:boolean,
+ *            waves:boolean, tabs:boolean, xf:boolean}}
  */
 export function visibility(layout, page, fxDeck) {
   const p = effectivePage(layout, page);
   const fx = fxDeck === 'B' ? 'B' : 'A';
   if (layout === 'console') {
-    return { decks: true, mixer: true, fxA: true, fxB: true, songs: p === 'songs', waves: true, tabs: false, xf: true };
+    return {
+      decks: true, mixer: true, fxA: true, fxB: true, songs: p === 'songs', player: p === 'player', waves: true, tabs: false,
+      xf: true,
+    };
   }
+  const pl = p === 'player';
   return {
-    decks: layout !== 'pp' || p === 'decks',
+    decks: !pl && (layout !== 'pp' || p === 'decks'),
     mixer: p === 'mix',
     fxA: p === 'fx' && fx === 'A',
     fxB: p === 'fx' && fx === 'B',
     songs: p === 'songs',
-    waves: layout !== 'pl' || p === 'mix',
+    player: pl,
+    waves: !pl && (layout !== 'pl' || p === 'mix'),
     tabs: layout === 'pp' || layout === 'tp',
-    xf: true,
+    xf: !pl,
   };
 }
 
 /**
  * Where the Auto Mix controls go in a layout.
- *   pp / tp: the AUTO switch sits in the tab bar; while Auto Mix is on, a status strip row (AM_STRIP_H) shows
- *            above the crossfader (pp: on the DECKS page only, so the MIX / FX pages keep their height).
- *   pl:      AUTO / MIX NOW pills over the left end of the waveforms (no spare height on a phone in landscape).
+ *   pp / tp: while Auto Mix is on, a status strip row (AM_STRIP_H) shows above the crossfader (pp: on the DECKS
+ *            page only, so the MIX / FX pages keep their height; never on the player page, which shows it all).
+ *            The AUTO switch sits in the tab bar: always on tablets; on phones only without a Player (with one,
+ *            the PLAYER tab takes its place and Auto Mix is two taps away: PLAYER, then play or AUTO MIX).
+ *   pl:      AUTO (with a Player: PLAYER) / MIX NOW pills over the left end of the waveforms.
  *   console: a status row with the AUTO switch inside the crossfader panel, always shown.
+ * @param {{player?:boolean}} [opts]  player: a Player exists (the PLAYER tab is shown)
  * @returns {{where:'row'|'waves'|'xf', show:boolean, row:boolean, tabToggle:boolean}}
  *   show: the strip element is visible; row: it takes a row of the page stack (computeSizes opts.am).
  */
-export function automixPlacement(layout, page, enabled) {
+export function automixPlacement(layout, page, enabled, opts = {}) {
   const on = !!enabled;
+  const player = !!(opts && opts.player);
   if (layout === 'console') return { where: 'xf', show: true, row: false, tabToggle: false };
   if (layout === 'pl') return { where: 'waves', show: true, row: false, tabToggle: false };
   const p = effectivePage(layout, page);
-  const show = on && (layout !== 'pp' || p === 'decks');
-  return { where: 'row', show, row: show, tabToggle: true };
+  const show = on && p !== 'player' && (layout !== 'pp' || p === 'decks');
+  return { where: 'row', show, row: show, tabToggle: layout === 'tp' || !player };
+}
+
+// ---- Auto Mix strip: the mini transport ------------------------------------------------------------------------
+
+/** Widths (CSS px) of the Auto Mix strip parts; css/app.css sizes the same parts with these numbers. */
+export const STRIP = Object.freeze({
+  pad: 14, gap: 6, btn: 38, btnGap: 2, mixNow: 76, toggle: 84, toggleMini: 44, infoMin: 90,
+});
+
+/**
+ * The content width of the Auto Mix status strip for a sizes object (computeSizes), or 0 where the strip is a
+ * pair of pills (pl) with no room for a transport.
+ */
+export function stripWidth(s) {
+  if (!s) return 0;
+  if (s.layout === 'pp' || s.layout === 'tp') return Math.max(0, s.cw - STRIP.pad - 2);
+  if (s.layout === 'console') return Math.max(0, (s.mixW || 0) - 2 - 20 - 8);
+  return 0;
+}
+
+/**
+ * What fits in the strip next to the status text (which keeps at least STRIP.infoMin px): the mini transport
+ * 'full' (previous / play-pause / next), 'compact' (play-pause / next) or 'none', and whether the AUTO switch
+ * keeps its label (console) or shrinks to the bare switch. MIX NOW always keeps its place (no jump when a mix
+ * starts). 360 x 560 phones (314 px) get the full transport.
+ * @param {number} width  stripWidth()
+ * @param {{toggle?:boolean}} [o]  toggle: the strip shows the AUTO switch (console)
+ * @returns {{transport:'full'|'compact'|'none', toggleLabel:boolean, info:number}}
+ */
+export function stripFit(width, { toggle = false } = {}) {
+  const W = Number.isFinite(width) ? width : 0;
+  const tw = (n) => (n ? n * STRIP.btn + (n - 1) * STRIP.btnGap : 0);
+  const tries = toggle ? [[true, 3], [false, 3], [false, 2], [false, 0]] : [[false, 3], [false, 2], [false, 0]];
+  let last = null;
+  for (const [label, n] of tries) {
+    const parts = [tw(n), STRIP.mixNow, toggle ? (label ? STRIP.toggle : STRIP.toggleMini) : 0].filter((x) => x > 0);
+    const info = W - parts.reduce((a, b) => a + b, 0) - parts.length * STRIP.gap;
+    last = { transport: n === 3 ? 'full' : n === 2 ? 'compact' : 'none', toggleLabel: label, info: Math.max(0, Math.floor(info)) };
+    if (info >= STRIP.infoMin) return last;
+  }
+  return last;
+}
+
+// ---- Player page --------------------------------------------------------------------------------------------
+
+/**
+ * Fixed heights (CSS px) inside the player page that css/app.css uses too: seek row, transport row (64 px play
+ * button), options row (transition + volume), the inline transition chooser (two-column layouts), the title
+ * block under a big cover, the head row (pl / console: title + close), the gap, and the room phones keep for the
+ * Up next list under the fixed part. Two columns from TWO_COL_MIN px.
+ */
+export const PLAYER_GEOM = Object.freeze({
+  seek: 46, transport: 68, opts: 44, chooser: 104, meta: 60, head: 44, gap: 8, pad: 8, listMin: 220, twoColMin: 640,
+});
+
+/** The player page's content box (CSS px) for a sizes object (computeSizes) in each layout. */
+export function playerBox(s) {
+  if (!s) return { w: 0, h: 0 };
+  const G = PLAYER_GEOM;
+  let w = s.cw;
+  let h;
+  if (s.layout === 'pp') h = s.ch - s.hdr - s.tabs - 2 * G.pad;
+  else if (s.layout === 'tp') h = s.ch - s.hdr - s.tabs - 2 * s.gap - 2 * G.pad;
+  else if (s.layout === 'pl') h = s.ch - s.hdr - s.gap - G.head - G.pad;
+  else {
+    // console: the bottom drawer (css: width min(100% - 32px, 980px), height min(66%, 640px), 14 / 18 px padding)
+    const vw = s.cw + (s.gl || 0) + (s.gr || 0);
+    w = Math.min(vw - 32, 980) - 36;
+    h = Math.min(Math.round(s.ch * 0.66), 640) - 22 - G.head;
+  }
+  return { w: Math.max(0, Math.floor(w)), h: Math.max(0, Math.floor(h)) };
+}
+
+/**
+ * How the player page arranges itself in a w x h box (playerBox):
+ *   cols 1 (phones): now playing, seek, transport and the options row stay put; Up next / History scroll below
+ *     and keep PLAYER_GEOM.listMin px. cols 2 (>= twoColMin px: tablets, phone landscape, the desktop drawer):
+ *     now playing + transport + transition chooser + volume on the left (colW wide), the queue on the right.
+ *   stack: a big cover with the title under it (when there is room for a >= 140 px cover), else a small cover
+ *     beside the title (art 64..96 px).
+ * @returns {{cols:1|2, colW:number, stack:boolean, art:number}}
+ */
+export function playerLayout(w, h) {
+  const G = PLAYER_GEOM;
+  const W = Number.isFinite(w) ? Math.max(0, w) : 0;
+  const H = Number.isFinite(h) ? Math.max(0, h) : 0;
+  const cols = W >= G.twoColMin ? 2 : 1;
+  const colW = cols === 2 ? clamp(Math.round(W * 0.46), 300, 440) : W;
+  const below = cols === 2
+    ? G.seek + G.transport + G.chooser + G.opts + 4 * G.gap
+    : G.seek + G.transport + G.opts + 4 * G.gap + G.listMin;
+  const room = H - below - G.meta - G.gap;
+  const big = Math.floor(Math.min(room, colW - 64, 280));
+  const stack = big >= 140;
+  const art = stack ? big : clamp(Math.round(H * 0.18), 64, 96);
+  return { cols, colW, stack, art };
 }

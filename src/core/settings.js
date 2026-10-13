@@ -34,6 +34,10 @@ export const DEFAULTS = Object.freeze({
   mixBeats: 32,            // Auto Mix transition length in beats: 16 | 32 | 64
   automixReturn: true,     // after a mix, ease the new song back to its own tempo
   automixBassSwap: true,   // swap the bass (low EQ) half way through a mix, like a DJ
+  transitionStyle: 'dj',   // how the queue moves to the next song: 'dj' (beat-matched mix) | 'crossfade' | 'gapless'
+  crossfadeSec: 6,         // 'crossfade' style: overlap in seconds (2..12)
+  playerShuffle: false,    // player: upcoming songs in random order
+  playerRepeat: 'off',     // player: 'off' | 'all' (start the queue again) | 'one' (repeat the current song)
 });
 
 export class Settings extends Emitter {

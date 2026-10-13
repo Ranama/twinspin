@@ -5,6 +5,8 @@
 import { Emitter } from '../src/core/emitter.js';
 import { AutoMix } from '../src/deck/automix.js';
 import { Playlist } from '../src/deck/playlist.js';
+import { Player } from '../src/deck/player.js';
+import { mulberry32 } from '../src/core/util.js';
 import { Deck } from '../src/deck/deck.js';
 import { SyncController } from '../src/deck/sync.js';
 import { returnSeconds, crossfadeAt } from '../src/deck/automix-plan.js';
@@ -394,10 +396,10 @@ class FakeLibrary extends Emitter {
   }
 }
 
-function setup({ items = ['s1', 's2', 's3'], settings = {}, start = true, deps = {} } = {}) {
+function setup({ items = ['s1', 's2', 's3'], settings = {}, start = true, deps = {}, random = null } = {}) {
   const st = new FakeSettings(settings);
   const library = new FakeLibrary();
-  const playlist = new Playlist({ settings: st, library });
+  const playlist = new Playlist({ settings: st, library, random });
   playlist.add(items.map((id) => (id.startsWith('demo-') ? { kind: 'demo', id: Number(id.slice(5)) } : { id })));
   const decks = [new FakeDeck('A'), new FakeDeck('B')];
   const mixer = new FakeMixer();
@@ -1138,12 +1140,12 @@ const SONGS_E2E = {
  * Real Decks, SyncController, Playlist and AutoMix on ClockPlayers and a fake mixer. Songs are told apart by
  * their length (the fake analysis looks them up by it).
  */
-function realRig({ songsE2E = SONGS_E2E, items = ['e1', 'e2', 'e3'], settings = {} } = {}) {
+function realRig({ songsE2E = SONGS_E2E, items = ['e1', 'e2', 'e3'], settings = {}, random = null } = {}) {
   const st = new FakeSettings({ mixBeats: 16, autoSync: true, quantize: true, tempoRange: 0.08, vinyl: true, ...settings });
   const library = new FakeLibrary();
   library.entries = Object.keys(songsE2E).map((id) => ({ id, title: id.toUpperCase(), fileName: `${id}.mp3` }));
   library.getBlob = (id) => Promise.resolve({ name: `${id}.mp3`, size: 1, id });
-  const playlist = new Playlist({ settings: st, library });
+  const playlist = new Playlist({ settings: st, library, random });
   playlist.add(items.map((id) => ({ id })));
   const mixer = new FakeMixer();
   mixer.channels = [new StripStub(), new StripStub()];
@@ -1369,4 +1371,938 @@ test('end to end: a meet transition (pre-ramp, ease back) then a cut (echo out, 
   assert.deepEqual(log.deckErrors, []);
   assert.deepEqual(log.syncErrors, []);
   r.done();
+});
+
+// ---- music player: transition styles, repeat and transport (docs/PLAYER.md section 3) ---------------------------
+
+/** The mixer's crossfader schedule calls since index `from`. */
+const schedules = (s, from = 0) => s.mixer.calls.slice(from).filter((c) => c[0] === 'schedule');
+
+test("style 'crossfade': both songs at rate 1, an equal-power fade of crossfadeSec ending at the musical end", async () => {
+  const s = setup({ settings: { transitionStyle: 'crossfade', crossfadeSec: 8 } });
+  const tA = await startedAndReady(s);
+  const plan = s.am.plan;
+  assert.equal(plan.style, 'crossfade');
+  assert.equal(plan.mode, 'crossfade');
+  assert.closeTo(plan.out.at, 112, 1e-9, '8 s before the end of the 120 s song');
+  assert.closeTo(plan.in.at, 0.1, 1e-9, 'the first beat of the next song');
+  assert.equal(s.B.targetRate, 1, 'parked at its own tempo');
+  assert.equal(s.B.mix.eq.low, 0, 'no bass cut');
+  await until(() => s.am.state === 'preparing', 200000, 'preparing');
+  const t0 = tA + 112;
+  const playAt = s.B.last('playAt');
+  assert.closeTo(playAt[1], t0, 1e-6, 'the next song starts crossfadeSec before the musical end');
+  assert.closeTo(s.A.positionAt(t0), 112, 1e-6);
+  const sch = s.mixer.last('schedule');
+  assert.deepEqual(sch.slice(0, 3), ['schedule', -1, 1]);
+  assert.closeTo(sch[3], t0, 1e-6);
+  assert.closeTo(sch[4], 8, 1e-9);
+  assert.closeTo(s.A.positionAt(sch[3] + sch[4]), 120, 1e-6, 'the fade ends exactly at the musical end');
+  await until(() => s.am.state === 'mixing', 5000, 'mixing');
+  await sleep(1000);
+  assert.equal(s.B.targetRate, 1);
+  assert.equal(s.A.targetRate, 1);
+  assert.equal(s.A.count('setEq'), 0, 'no bass swap');
+  assert.equal(s.A.count('echoOut'), 0);
+  await until(() => s.am.currentDeck === 1, 20000, 'handover');
+  assert(now() >= t0 + 8.3 - 1e-9);
+  assert.equal(s.sync.calls.filter((c) => c[1]).length, 0, 'no sync');
+  assert.equal(s.B.calls.filter((c) => c[0] === 'rampTempo' && c[2] > 0).length, 0, 'no ease back');
+  assert.equal(s.playlist.currentIndex, 1);
+  assert.deepEqual(s.log.takeovers, []);
+  s.done();
+});
+
+test("style 'gapless': the next song starts exactly at the musical end with a 15 ms fade", async () => {
+  const s = setup({ settings: { transitionStyle: 'gapless' } });
+  const tA = await startedAndReady(s);
+  const plan = s.am.plan;
+  assert.equal(plan.mode, 'gapless');
+  assert.closeTo(plan.out.at, 120, 1e-9);
+  assert.closeTo(plan.in.at, 0, 1e-9, 'the musical start (no waveform: the start of the file)');
+  await until(() => s.am.state === 'preparing', 200000, 'preparing');
+  const t0 = tA + 120;
+  assert.closeTo(s.B.last('playAt')[1], t0, 1e-6);
+  assert.closeTo(s.B.last('seek')[1], 0, 1e-9);
+  const sch = s.mixer.last('schedule');
+  assert.closeTo(sch[3], t0, 1e-6, 'the crossfader jumps on the audio clock at that moment');
+  assert.closeTo(sch[4], 0.015, 1e-12);
+  await until(() => s.am.currentDeck === 1, 10000, 'handover');
+  assert.equal(s.A.playing, false);
+  assert.equal(s.B.targetRate, 1);
+  assert.equal(s.playlist.currentIndex, 1);
+  assert.deepEqual(s.log.errors, []);
+  s.done();
+});
+
+test('a style change re-plans at once (also a mix that is only prepared)', async () => {
+  const s = setup();
+  await startedAndReady(s);
+  assert.equal(s.am.plan.mode, 'match');
+  assert.equal(s.B.mix.eq.low, -1);
+  s.settings.set('transitionStyle', 'crossfade');
+  assert.equal(s.am.plan.mode, 'crossfade');
+  assert.closeTo(s.am.plan.out.at, 114, 1e-9, 'default 6 s');
+  assert.equal(s.B.mix.eq.low, 0, 're-parked without the bass cut');
+  assert.equal(s.B.targetRate, 1, 'and at its own tempo');
+  s.settings.set('crossfadeSec', 10);
+  assert.closeTo(s.am.plan.out.at, 110, 1e-9);
+  // a prepared dj mix is called off and planned again in the new style
+  s.settings.set('transitionStyle', 'dj');
+  await until(() => s.am.state === 'preparing', 200000, 'preparing');
+  s.settings.set('transitionStyle', 'gapless');
+  assert.equal(s.am.state, 'playing');
+  assert.equal(s.B.playing, false, 'the scheduled start was undone');
+  assert.equal(s.am.plan.mode, 'gapless');
+  await until(() => s.am.state === 'mixing', 30000, 'mixing');
+  assert.closeTo(s.mixer.last('schedule')[4], 0.015, 1e-12);
+  assert.deepEqual(s.log.takeovers, []);
+  s.done();
+});
+
+test('pause / resume while a song plays: no takeover, the mix moves by the length of the pause', async () => {
+  const s = setup();
+  const tA = await startedAndReady(s);
+  await sleep(20000);
+  assert.equal(s.am.pause(), true);
+  assert.equal(s.A.last('pause')[1], 'auto');
+  assert.equal(s.A.playing, false);
+  assert.equal(s.am.paused, true);
+  assert.equal(s.am.enabled, true);
+  assert.equal(s.am.state, 'playing');
+  assert.equal(s.am.pause(), false, 'already paused');
+  const pos = s.A.position;
+  const tPause = now();
+  await sleep(120000);
+  assert.equal(s.am.state, 'playing', 'nothing happens while paused');
+  assert.closeTo(s.A.position, pos, 1e-9);
+  assert.equal(s.am.secondsToMix, null);
+  assert.equal(s.B.count('playAt'), 0);
+  assert.equal(s.am.resume(), true);
+  const pauseLen = now() - tPause;
+  assert.equal(s.A.last('play')[1], 'auto');
+  assert.equal(s.am.paused, false);
+  assert.equal(s.am.resume(), false);
+  await until(() => s.am.state === 'mixing', 200000, 'mixing');
+  assert.closeTo(s.B.last('playAt')[1], tA + 105 + pauseLen, 1e-6);
+  assert.deepEqual(s.log.takeovers, []);
+  assert.deepEqual(s.log.errors, []);
+  s.done();
+});
+
+test('pause during a mix freezes both decks, the crossfade and the bass swap; resume continues them in phase', async () => {
+  const s = setup();
+  await startedAndReady(s);
+  await until(() => s.am.state === 'mixing', 200000, 'mixing');
+  const t0 = s.B.last('playAt')[1];
+  await sleep(3000);
+  const nCalls = s.mixer.calls.length;
+  assert(s.am.pause());
+  const tP = now();
+  const elapsed = tP - t0;
+  assert.equal(s.A.playing, false);
+  assert.equal(s.B.playing, false);
+  assert.equal(s.A.last('pause')[1], 'auto');
+  assert.equal(s.B.last('pause')[1], 'auto');
+  assert(s.mixer.calls.slice(nCalls).some((c) => c[0] === 'cancel'), 'crossfade frozen');
+  const xP = s.mixer.crossfader;
+  assert.closeTo(xP, crossfadeAt(elapsed / 15), 1e-9);
+  assert.equal(s.A.mix.eq.low, 0, 'the bass swap (due at 7.5 s) is put back');
+  assert.equal(s.B.mix.eq.low, -1);
+  assert.equal(s.B.synced, false, 'no phase keeping while paused');
+  const prog = s.am.progress;
+  assert.closeTo(prog, elapsed / 15, 1e-9);
+  const posA = s.A.position;
+  const posB = s.B.position;
+  await sleep(60000);
+  assert.equal(s.am.state, 'mixing', 'still in the mix');
+  assert.equal(s.am.currentDeck, 0, 'no handover while paused');
+  assert.closeTo(s.am.progress, prog, 1e-12, 'progress held');
+  assert.closeTo(s.mixer.crossfader, xP, 1e-12);
+  assert.closeTo(s.A.position, posA, 1e-9);
+  assert.closeTo(s.B.position, posB, 1e-9);
+  assert.deepEqual(s.log.takeovers, []);
+  // resume: both decks start together, the crossfade goes on from where it stopped
+  assert(s.am.resume());
+  const tr = s.A.last('playAt')[1];
+  assert.closeTo(tr, now() + 0.05, 1e-9);
+  assert.equal(s.B.last('playAt')[1], tr, 'both decks on the same audio-clock time');
+  const sch = s.mixer.last('schedule');
+  const t0b = t0 + (tr - tP);
+  assert.closeTo(sch[3], t0b, 1e-9, 'the curve keeps its timing, moved by the pause');
+  assert.closeTo(sch[4], 15, 1e-9);
+  assert.closeTo(crossfadeAt((tr - sch[3]) / sch[4]), xP, 1e-9, 'continuous at the restart');
+  const eqA = s.A.last('setEq');
+  assert.deepEqual([eqA[1], eqA[2], eqA[5]], ['low', -1, 'auto']);
+  assert.closeTo(eqA[3], t0b + 7.5, 1e-9, 'the bass swap is scheduled again');
+  assert.closeTo(s.B.last('setEq')[3], t0b + 7.5, 1e-9);
+  await sleep(2000);
+  const T = now();
+  const plan = s.am.plan;
+  assert.closeTo(s.B.beatsAt(s.B.positionAt(T)) - plan.in.beat, s.A.beatsAt(s.A.positionAt(T)) - plan.out.beat, 1e-6, 'in phase');
+  assert.closeTo(s.A.positionAt(T), 105 + (T - t0b), 1e-6);
+  await until(() => s.am.currentDeck === 1, 30000, 'handover');
+  assert(now() >= t0b + 15.3 - 1e-9, 'the mix finished on its moved schedule');
+  assert.equal(s.B.mix.eq.low, 0);
+  assert.equal(s.A.playing, false);
+  assert.deepEqual(s.log.takeovers, []);
+  s.done();
+});
+
+test("pause during a 'crossfade' mix and resume: the fade continues where it stopped", async () => {
+  const s = setup({ settings: { transitionStyle: 'crossfade', crossfadeSec: 8 } });
+  await startedAndReady(s);
+  await until(() => s.am.state === 'mixing', 200000, 'mixing');
+  const t0 = s.B.last('playAt')[1];
+  await sleep(2000);
+  s.am.pause();
+  const tP = now();
+  const xP = s.mixer.crossfader;
+  assert.closeTo(xP, crossfadeAt((tP - t0) / 8), 1e-9);
+  await sleep(5000);
+  s.am.resume();
+  const tr = s.B.last('playAt')[1];
+  const sch = s.mixer.last('schedule');
+  assert.closeTo(sch[3], t0 + (tr - tP), 1e-9);
+  assert.closeTo(sch[4], 8, 1e-9);
+  await sleep(1000);
+  assert.closeTo(s.mixer.crossfader, crossfadeAt((now() - sch[3]) / 8), 1e-9);
+  await until(() => s.am.currentDeck === 1, 20000, 'handover');
+  assert(now() >= sch[3] + 8.3 - 1e-9);
+  assert.deepEqual(s.log.takeovers, []);
+  s.done();
+});
+
+test('a user move during a paused mix is still a takeover; switching off while paused leaves both decks stopped', async () => {
+  const s = setup();
+  await startedAndReady(s);
+  await until(() => s.am.state === 'mixing', 200000, 'mixing');
+  await sleep(1000);
+  s.am.pause();
+  s.mixer.setCrossfader(0.4); // the user grabs the crossfader
+  assert.equal(s.am.enabled, false);
+  assert.deepEqual(s.log.takeovers, ['Auto Mix off. You took over the mix.']);
+  assert(!s.A.playing && !s.B.playing);
+  assert.equal(s.am.paused, false);
+  s.done();
+});
+
+test('skip: a 1.5 s equal-power fade into the next song now (no beat matching); during a mix: done at once', async () => {
+  const s = setup();
+  await startedAndReady(s);
+  await sleep(10000);
+  const n0 = s.mixer.calls.length;
+  assert.equal(s.am.skip(), true);
+  const t0 = s.B.last('playAt')[1];
+  assert.closeTo(t0, now() + 0.1, 1e-9);
+  assert.equal(s.am.plan.quick, true);
+  assert.equal(s.am.plan.mode, 'cut');
+  assert.equal(s.B.targetRate, 1, 'at its own tempo (it was parked at the matched tempo)');
+  assert.closeTo(s.B.last('seek')[1], 0.1, 1e-9, 'from its first beat');
+  assert.equal(s.B.mix.eq.low, 0, 'full bass at once');
+  const sch = schedules(s, n0)[0];
+  assert.deepEqual(sch.slice(0, 3), ['schedule', -1, 1]);
+  assert.closeTo(sch[3], t0, 1e-9);
+  assert.closeTo(sch[4], 1.5, 1e-12);
+  await until(() => s.am.currentDeck === 1, 5000, 'handover');
+  assert(now() >= t0 + 1.8 - 1e-9 && now() < t0 + 2);
+  assert.equal(s.A.playing, false);
+  assert.equal(s.playlist.currentIndex, 1);
+  assert.equal(s.sync.calls.filter((c) => c[1]).length, 0, 'no sync');
+  assert.equal(s.A.count('echoOut'), 0);
+  // the next song is prepared as usual, and a mix during it completes at once with skip
+  await until(() => s.am.state === 'mixing', 200000, 'mix 2');
+  await sleep(2000);
+  assert(s.am.skip());
+  assert.equal(s.am.state, 'playing');
+  assert.equal(s.am.currentDeck, 0);
+  assert.equal(s.playlist.currentIndex, 2);
+  assert.equal(s.B.playing, false, 'the old song stops');
+  assert.deepEqual(s.mixer.last('set').slice(0, 3), ['set', -1, 'auto']);
+  const eq = s.A.last('setEq');
+  assert.deepEqual([eq[1], eq[2], eq[3], eq[5]], ['low', 0, undefined, 'auto'], 'the new song gets its bass now');
+  assert.deepEqual(s.log.takeovers, []);
+  assert.deepEqual(s.log.errors, []);
+  s.done();
+});
+
+test('skip before the next song is loaded waits for it (pendingItem); skip twice goes two songs on; last song: a message', async () => {
+  const s = setup({ items: ['s1', 's2', 's3', 's4'] });
+  await until(() => s.am.state === 'playing', 5000, 'playing');
+  assert.equal(s.am.nextReady, false, '(deck B still loading)');
+  assert(s.am.skip());
+  assert.equal(s.am.pendingItem.id, 's2');
+  assert(s.am.skip(), 'pressed again while waiting');
+  assert.equal(s.am.pendingItem.id, 's3');
+  assert.equal(s.am.nextItem.id, 's3');
+  await until(() => s.am.state === 'mixing', 5000, 'quick fade');
+  assert.equal(s.am.plan.quick, true);
+  assert.equal(s.am.pendingItem, null);
+  assert.equal(s.B.track.libraryId, 's3');
+  await until(() => s.am.currentDeck === 1, 5000, 'handover');
+  assert.equal(s.playlist.currentIndex, 2, 's2 was skipped over');
+  await until(() => s.am.nextReady, 5000, 'next ready');
+  assert(s.am.skip());
+  await until(() => s.am.currentDeck === 0 && s.am.state === 'playing', 5000, 'last song');
+  assert.equal(s.A.track.libraryId, 's4');
+  assert.equal(s.am.skip(), false);
+  assert.match(s.log.errors[0], /last song/);
+  s.done();
+});
+
+test('back: restarts the song past 5 s, else the previous song; during a mix it restarts the song being mixed out', async () => {
+  const s = setup();
+  await startedAndReady(s);
+  await sleep(30000);
+  assert(s.am.back());
+  assert.deepEqual(s.A.last('seek').slice(0, 3), ['seek', 0, 'auto'], 'from its in-point');
+  assert.equal(s.A.playing, true);
+  assert.equal(s.playlist.currentIndex, 0);
+  assert.equal(s.am.state, 'playing');
+  // skip to s2, then back within 5 s: s1 again with the quick fade
+  await until(() => s.am.nextReady, 5000, 'next ready');
+  s.am.skip();
+  await until(() => s.am.currentDeck === 1 && s.am.state === 'playing', 5000, 'on s2');
+  await sleep(1000);
+  assert(s.am.back());
+  assert.equal(s.am.pendingItem.id, 's1');
+  await until(() => s.am.currentDeck === 0 && s.am.state === 'playing', 5000, 'back on s1');
+  assert.equal(s.A.track.libraryId, 's1');
+  assert.equal(s.playlist.currentIndex, 0);
+  assert.closeTo(s.A.position, 1.8, 0.25, 'from its start');
+  // during a mix: the song being mixed out restarts, the mix is called off
+  await until(() => s.am.state === 'mixing', 200000, 'mixing');
+  await sleep(2000);
+  assert(s.am.back());
+  assert.equal(s.am.state, 'playing');
+  assert.equal(s.am.currentDeck, 0);
+  assert.equal(s.B.playing, false, 'the incoming song stops');
+  assert.deepEqual(s.mixer.last('set').slice(0, 3), ['set', -1, 'auto']);
+  assert.closeTo(s.A.last('seek')[1], 0, 1e-9);
+  assert.equal(s.A.playing, true);
+  assert.equal(s.A.mix.eq.low, 0);
+  assert.equal(s.B.mix.eq.low, -1, 'parked again for the next mix');
+  assert.closeTo(s.B.position, 0.1, 1e-9);
+  assert.equal(s.playlist.currentIndex, 0);
+  assert.deepEqual(s.log.takeovers, []);
+  assert.equal(s.am.enabled, true);
+  s.done();
+});
+
+test('jumpTo: that song now (the list goes on after it); the current one restarts; off: starts there', async () => {
+  const s = setup({ items: ['s1', 's2', 's3', 's4'] });
+  await startedAndReady(s);
+  await sleep(5000);
+  const [, , c] = s.playlist.items;
+  assert(s.am.jumpTo(c.uid));
+  assert.equal(s.am.pendingItem, c);
+  await until(() => s.am.currentDeck === 1 && s.am.state === 'playing', 5000, 'on s3');
+  assert.equal(s.B.track.libraryId, 's3');
+  assert.equal(s.playlist.currentIndex, 2);
+  await until(() => s.am.nextReady, 5000, 'next ready');
+  assert.equal(s.am.nextItem.id, 's4', 'the list goes on after it');
+  // the current song itself: a restart
+  await sleep(20000);
+  assert(s.am.jumpTo(c.uid));
+  assert.closeTo(s.B.last('seek')[1], 0.05, 1e-9);
+  assert.equal(s.am.currentDeck, 1);
+  assert.equal(s.am.jumpTo('nope'), false);
+  s.done();
+  // off and idle: switch on with that song
+  const o = setup({ start: false });
+  const [, b] = o.playlist.items;
+  assert(o.am.jumpTo(b.uid));
+  assert.equal(o.am.enabled, true);
+  await until(() => o.am.state === 'playing', 5000, 'playing');
+  assert.equal(o.A.last('loadFile')[1], 's2');
+  assert.equal(o.playlist.currentIndex, 1);
+  o.done();
+});
+
+test("repeat 'all': after the last song the list starts over (and never finishes)", async () => {
+  const s = setup({ items: ['s1', 's2'], settings: { playerRepeat: 'all' } });
+  await startedAndReady(s);
+  await until(() => s.am.currentDeck === 1 && s.am.state === 'playing', 200000, 'on s2');
+  await until(() => s.am.nextReady, 5000, 'next ready');
+  assert.equal(s.am.nextItem.id, 's1', 'the top of the list is next');
+  assert.equal(s.A.last('loadFile')[1], 's1');
+  await until(() => s.am.currentDeck === 0 && s.am.state === 'playing', 200000, 'on s1 again');
+  assert.equal(s.playlist.currentIndex, 0);
+  assert(!s.playlist.isPlayed(s.playlist.items[1].uid), 'everything unplayed again');
+  assert.equal(s.log.finished, 0);
+  assert.equal(s.am.enabled, true);
+  await until(() => s.am.nextReady, 5000, 'next ready');
+  assert.equal(s.am.nextItem.id, 's2');
+  s.done();
+});
+
+test("repeat 'one': the same song on the other deck, mixed into itself; switching repeat changes the next song", async () => {
+  const s = setup({ items: ['s1', 's2'], settings: { playerRepeat: 'one' } });
+  const tA = await startedAndReady(s);
+  assert.equal(s.am.nextItem.id, 's1');
+  assert.equal(s.B.last('loadFile')[1], 's1');
+  assert.equal(s.am.plan.mode, 'match');
+  await until(() => s.am.state === 'mixing', 200000, 'mixing');
+  assert.closeTo(s.B.last('playAt')[1], tA + 105, 1e-6);
+  await until(() => s.am.currentDeck === 1 && s.am.state === 'playing', 30000, 'handover');
+  assert.equal(s.playlist.currentIndex, 0, 'still the same song');
+  await until(() => s.am.nextReady, 5000, 'next ready');
+  assert.equal(s.A.track.libraryId, 's1', 'deck A already holds it');
+  assert.equal(s.A.calls.filter((c) => c[0] === 'loadFile').length, 1, 'not loaded again');
+  assert.closeTo(s.A.position, 0, 1e-9, 'parked at its in-point again');
+  // repeat off: s2 is next; repeat one again: s1
+  s.settings.set('playerRepeat', 'off');
+  assert.equal(s.am.nextItem.id, 's2');
+  await until(() => s.am.nextReady && s.A.track && s.A.track.libraryId === 's2', 5000, 's2 ready');
+  s.settings.set('playerRepeat', 'one');
+  await until(() => s.am.nextReady && s.A.track && s.A.track.libraryId === 's1', 5000, 's1 ready');
+  // skip with repeat one goes to the next song of the list
+  s.am.skip();
+  await until(() => s.am.currentDeck === 0 && s.am.state === 'playing', 5000, 'skipped');
+  assert.equal(s.A.track.libraryId, 's2');
+  assert.equal(s.playlist.currentIndex, 1);
+  s.done();
+});
+
+test('play(): starts the queue at its current song, resumes a paused one in place, resumes after pause()', async () => {
+  const s = setup({ items: ['s1', 's2', 's3'], start: false });
+  s.playlist.setCurrent(1);
+  assert.equal(s.am.startItem.id, 's2');
+  assert(s.am.play());
+  await until(() => s.am.state === 'playing', 5000, 'playing');
+  assert.equal(s.A.last('loadFile')[1], 's2');
+  await sleep(30000);
+  s.am.pause();
+  const pos = s.A.position;
+  s.am.setEnabled(false); // e.g. the AUTO switch on the DECKS page
+  assert.equal(s.am.enabled, false);
+  assert.equal(s.am.startItem.id, 's2');
+  const loads = s.A.calls.filter((c) => c[0] === 'loadFile').length;
+  assert(s.am.play());
+  assert.equal(s.am.state, 'playing');
+  assert.equal(s.A.playing, true);
+  assert.closeTo(s.A.position, pos, 1e-6, 'resumed where it was');
+  assert.equal(s.A.calls.filter((c) => c[0] === 'loadFile').length, loads, 'not loaded again');
+  assert.equal(s.A.last('play')[1], 'auto');
+  // paused: play resumes
+  s.am.pause();
+  assert(s.am.play());
+  assert.equal(s.A.playing, true);
+  assert.equal(s.am.paused, false);
+  assert.deepEqual(s.log.takeovers, []);
+  s.done();
+});
+
+test('seek: the current song (re-planned), not during a mix; past the mix point it mixes at the next bar', async () => {
+  const s = setup();
+  const tA = await startedAndReady(s);
+  await sleep(5000);
+  assert(s.am.seek(50));
+  assert.deepEqual(s.A.last('seek').slice(0, 3), ['seek', 50, 'auto']);
+  assert.closeTo(s.am.secondsToMix, 55, 0.11);
+  assert.equal(s.am.seek(NaN), false);
+  await until(() => s.am.state === 'mixing', 200000, 'mixing');
+  assert.equal(s.am.seek(10), false, 'disabled during a mix');
+  assert(tA > 0);
+  s.done();
+  const l = setup();
+  await startedAndReady(l);
+  assert(l.am.seek(108));
+  await until(() => l.am.state === 'mixing', 5000, 'late mix');
+  assert.equal(l.am.plan.late, true);
+  l.done();
+});
+
+test('while off, skip / back move the song play() starts; a finished list starts over unless moved', async () => {
+  const s = setup({ items: ['s1', 's2', 's3'], start: false });
+  assert.equal(s.am.startItem.id, 's1');
+  assert(s.am.skip());
+  assert.equal(s.am.startItem.id, 's2');
+  assert.equal(s.playlist.currentIndex, 1);
+  assert(s.am.skip());
+  assert.equal(s.am.skip(), false, 'the last song (repeat off)');
+  s.settings.set('playerRepeat', 'all');
+  assert(s.am.skip());
+  assert.equal(s.am.startItem.id, 's1', 'repeat all wraps');
+  assert(s.am.back() === false, 'nothing before the first song');
+  s.playlist.setCurrent(2);
+  assert(s.am.back());
+  assert.equal(s.am.startItem.id, 's2');
+  assert.equal(s.am.enabled, false);
+  assert.equal(s.A.calls.length + s.B.calls.length, 0, 'no deck was touched');
+  s.done();
+});
+
+test('the transport never counts as a takeover and is safe in every state', async () => {
+  const s = setup({ start: false });
+  // off: nothing to pause / resume / seek
+  assert.equal(s.am.pause(), false);
+  assert.equal(s.am.resume(), false);
+  assert.equal(s.am.seek(10), false);
+  assert.equal(s.am.paused, false);
+  assert.equal(s.am.pendingItem, null);
+  assert.equal(s.am.currentItem, null);
+  // starting: pause holds the first song at its in-point
+  assert(s.am.play());
+  assert.equal(s.am.state, 'starting');
+  assert.equal(s.am.currentItem.id, 's1');
+  assert(s.am.pause());
+  await until(() => s.am.state === 'playing', 5000, 'loaded');
+  assert.equal(s.A.playing, false, 'not started while paused');
+  assert.equal(s.am.paused, true);
+  assert.equal(s.am.currentItem.id, 's1');
+  assert(s.am.resume());
+  assert.equal(s.A.playing, true);
+  await until(() => s.am.nextReady, 5000, 'next ready');
+  // skip while paused: the next song becomes current without a sound, still paused
+  s.am.pause();
+  assert(s.am.skip());
+  assert.equal(s.am.currentDeck, 1);
+  assert.equal(s.am.paused, true);
+  assert.equal(s.B.playing, false);
+  assert.equal(s.A.playing, false);
+  assert.equal(s.B.targetRate, 1);
+  assert.closeTo(s.B.position, 0.1, 1e-9);
+  assert.equal(s.playlist.currentIndex, 1);
+  assert(s.am.resume());
+  assert.equal(s.B.playing, true);
+  // a user PLAY on the current deck while paused ends the pause
+  s.am.pause();
+  s.B.play();
+  assert.equal(s.am.paused, false);
+  assert.equal(s.am.enabled, true);
+  // a user pause on the DECKS page reads as paused; resume plays it again
+  s.B.pause();
+  assert.equal(s.am.paused, true);
+  assert(s.am.resume());
+  assert.equal(s.B.playing, true);
+  assert.deepEqual(s.log.takeovers, []);
+  s.done();
+});
+
+test('end to end (real decks): pause / resume inside a beat-matched mix keeps the phase; skip; a crossfade-style mix', async () => {
+  const songs = {
+    p1: { bpm: 128, firstBeat: 0, seconds: 60 },
+    p2: { bpm: 124, firstBeat: 0.12, seconds: 50 },
+    p3: { bpm: 140, firstBeat: 0.05, seconds: 46 },
+    p4: { bpm: 100, firstBeat: 0.2, seconds: 44 },
+  };
+  const r = realRig({ songsE2E: songs, items: ['p1', 'p2', 'p3', 'p4'] });
+  const { am, A, B, pA, pB, log, playlist } = r;
+  assert(am.play());
+  await until(() => am.state === 'playing' && am.nextReady, 10000, 'first song + next ready');
+  await until(() => am.state === 'mixing', 120000, 'mix 1');
+  const plan = am.plan;
+  await sleep(1500);
+  assert.equal(B.synced, true);
+  assert(am.pause());
+  assert.equal(A.playing, false);
+  assert.equal(B.playing, false);
+  assert.equal(B.synced, false, 'no phase keeping while paused');
+  const posA = pA.getPosition();
+  const posB = pB.getPosition();
+  await sleep(8000);
+  assert.closeTo(pA.getPosition(), posA, 1e-9);
+  assert.closeTo(pB.getPosition(), posB, 1e-9);
+  assert.equal(am.state, 'mixing');
+  assert(am.resume());
+  const tr = pA.last('playAt')[1];
+  assert.equal(pB.last('playAt')[1], tr, 'both players restart on the same audio-clock time');
+  await sleep(1000);
+  assert.equal(B.synced, true, 'phase keeping is back');
+  const T = now();
+  assert.closeTo(B.beatsAt(pB.positionAt(T)) - plan.in.beat, A.beatsAt(pA.positionAt(T)) - plan.out.beat, 1e-4, 'still in phase');
+  await until(() => am.currentDeck === 1 && am.state === 'playing', 30000, 'handover 1');
+  assert.equal(playlist.currentIndex, 1);
+  // skip: p3 (140 BPM) with the quick fade, at its own tempo
+  await until(() => am.nextReady, 10000, 'next ready');
+  await sleep(3000);
+  assert(am.skip());
+  await until(() => am.currentDeck === 0 && am.state === 'playing', 10000, 'skipped');
+  assert.equal(A.track.libraryId, 'p3');
+  assert.closeTo(A.rate, 1, 1e-9, 'no beat matching');
+  assert.equal(B.playing, false);
+  assert.equal(playlist.currentIndex, 2);
+  // crossfade style for the last transition: p3 -> p4 at their own tempos, ending at p3's end
+  r.st.set('transitionStyle', 'crossfade');
+  r.st.set('crossfadeSec', 5);
+  await until(() => am.nextReady && am.plan && am.plan.mode === 'crossfade', 10000, 'crossfade planned');
+  await until(() => !!pB.last('playAt') && pB.last('playAt')[1] > tr + 30, 120000, 'mix 3 scheduled');
+  const t0 = pB.last('playAt')[1];
+  assert.closeTo(pA.positionAt(t0), 46 - 5, 1e-6, '5 s before the end of p3');
+  assert.closeTo(r.mixer.last('schedule')[4], 5, 1e-9);
+  await until(() => am.state === 'mixing', 5000, 'mix 3');
+  assert.closeTo(B.rate, 1, 1e-9);
+  assert.equal(A.synced || B.synced, false);
+  await until(() => log.finished === 1, 120000, 'finished');
+  assert.deepEqual(log.takeovers, [], 'the transport never looked like a takeover');
+  assert.deepEqual(log.errors, []);
+  assert.deepEqual(log.deckErrors, []);
+  assert.deepEqual(log.syncErrors, []);
+  r.done();
+});
+
+test('the queue changes while a mix is scheduled (shuffle, a drag): the songs in between stay to come', async () => {
+  const s = setup({ items: ['s1', 's2', 's3', 's4'] });
+  await startedAndReady(s);
+  await until(() => s.am.state === 'preparing', 200000, 'mix into s2 scheduled');
+  const [a, b, c, d] = s.playlist.items;
+  s.playlist.move(b.uid, 3); // s2 dragged to the end (or shuffled there) after the mix was put on the clock
+  await until(() => s.am.currentDeck === 1 && s.am.state === 'playing', 30000, 'handover');
+  assert.equal(s.B.track.libraryId, 's2');
+  assert.deepEqual(s.playlist.items.map((x) => x.uid), [a.uid, b.uid, c.uid, d.uid], 'moved up next to the old song');
+  assert.equal(s.playlist.currentIndex, 1);
+  assert(!s.playlist.isPlayed(c.uid) && !s.playlist.isPlayed(d.uid), 'nothing was skipped');
+  await until(() => s.am.nextReady, 5000, 'next ready');
+  assert.equal(s.am.nextItem.id, 's3');
+  assert.equal(s.A.calls.filter((x) => x[0] === 'loadFile').length, 2, 'one preload after the handover');
+  s.done();
+});
+
+test('the song being mixed into was dragged above the current one: it is moved back after it (no replay)', async () => {
+  const s = setup({ items: ['s1', 's2', 's3'] });
+  await startedAndReady(s);
+  await until(() => s.am.state === 'preparing', 200000, 'mix into s2 scheduled');
+  const [a, b, c] = s.playlist.items;
+  s.playlist.move(b.uid, 0);
+  await until(() => s.am.currentDeck === 1 && s.am.state === 'playing', 30000, 'handover');
+  assert.deepEqual(s.playlist.items.map((x) => x.uid), [a.uid, b.uid, c.uid]);
+  assert.equal(s.playlist.currentIndex, 1);
+  assert(s.playlist.isPlayed(a.uid), 'the old song stays played');
+  await until(() => s.am.nextReady, 5000, 'next ready');
+  assert.equal(s.am.nextItem.id, 's3');
+  s.done();
+});
+
+test('switching on from idle starts the song play() would (startItem): the current one, the next after it ended; cue()', async () => {
+  const s = setup({ items: ['s1', 's2', 's3'], start: false });
+  // cue: what play() / the AUTO switch start while off
+  const [, b, c] = s.playlist.items;
+  assert(s.am.cue(b.uid));
+  assert.equal(s.am.startItem, b);
+  assert.equal(s.am.cue('nope'), false);
+  assert(s.am.setEnabled(true), 'the AUTO switch');
+  await until(() => s.am.state === 'playing', 5000, 'playing');
+  assert.equal(s.A.last('loadFile')[1], 's2', 'the cued song, not the one after it');
+  assert.equal(s.am.cue(c.uid), false, 'only while off');
+  // switched off; the song plays out on its deck: switching on again goes on with the next one
+  s.am.setEnabled(false);
+  s.A.seek(119.9);
+  await until(() => !s.A.playing, 5000, 'played out');
+  assert.equal(s.playlist.current, b);
+  assert.equal(s.am.startItem, c, 'the current song already ended');
+  assert(s.am.setEnabled(true));
+  await until(() => s.am.state === 'playing', 5000, 'playing again');
+  assert.equal(s.A.last('loadFile')[1], 's3');
+  // paused and switched off mid-song: the AUTO switch resumes it in place
+  await sleep(10000);
+  s.am.pause();
+  const pos = s.A.position;
+  s.am.setEnabled(false);
+  const loads = s.A.count('loadFile');
+  assert(s.am.setEnabled(true));
+  assert.equal(s.A.playing, true);
+  assert.closeTo(s.A.position, pos, 1e-6);
+  assert.equal(s.A.count('loadFile'), loads);
+  s.done();
+});
+
+// ---- integrator: a player walk-through and the fixes found in review ------------------------------------------
+
+/** A Player on top of a setup() rig (no Media Session). */
+function playerFor(s) {
+  return new Player({
+    automix: s.am, playlist: s.playlist, decks: s.decks, engine: s.engine, settings: s.settings,
+    deps: { mediaSession: null, MediaMetadata: null },
+  });
+}
+
+const uidsOf = (list) => list.map((it) => it.uid);
+
+test('player walk-through: 4 songs shuffled, repeat all, dj then crossfade, pause in a crossfade, skip in a mix, back at 30 s / 3 s, jumpTo back, repeat one', async () => {
+  const s = setup({ items: ['s1', 's2', 's3', 'demo-1'], settings: { playerRepeat: 'all' }, start: false, random: mulberry32(11) });
+  const player = playerFor(s);
+  const states = [];
+  player.on('change', (w) => {
+    if (w === 'state') states.push(player.state);
+  });
+  const original = uidsOf(s.playlist.items);
+  assert(player.setShuffle(true));
+  assert.equal(s.settings.get('playerShuffle'), true);
+  const [q0, q1, q2, q3] = s.playlist.items;
+  assert.deepEqual(uidsOf(s.playlist.items).slice().sort(), original.slice().sort(), 'the same songs, shuffled');
+  assert.equal(player.state, 'stopped');
+  assert.equal(player.nowPlaying.item, q0, 'READY: the first song of the shuffled queue');
+  assert(player.play());
+  assert.equal(player.state, 'loading');
+  await until(() => s.am.state === 'playing' && s.am.nextReady, 10000, 'first song + next ready');
+  assert.equal(player.state, 'playing');
+  assert.equal(player.nowPlaying.item, q0);
+  assert.equal(s.am.nextItem, q1);
+  assert.deepEqual(uidsOf(player.upNext), uidsOf([q1, q2, q3]));
+
+  // 1. the first transition is a DJ mix; next during it completes the mix at once
+  assert.equal(s.am.plan.style, 'dj');
+  await until(() => s.am.state === 'mixing', 200000, 'dj mix');
+  await sleep(1000);
+  assert.equal(player.state, 'mixing');
+  assert.equal(player.nowPlaying.item, q0, 'while mixing: the song being mixed out');
+  assert(player.next());
+  assert.equal(player.state, 'playing');
+  assert.equal(s.am.currentDeck, 1);
+  assert.equal(s.playlist.current, q1);
+  assert.equal(s.A.playing, false);
+  assert.equal(s.B.playing, true);
+  assert.deepEqual(s.mixer.last('set').slice(0, 3), ['set', 1, 'auto']);
+  assert.deepEqual(uidsOf(player.history), [q0.uid]);
+
+  // 2. switched to a 7 s crossfade mid-queue: the next transition is re-planned in that style
+  assert(player.setTransition('crossfade'));
+  assert(player.setCrossfadeSec(7));
+  await until(() => s.am.nextReady && s.am.plan && s.am.plan.mode === 'crossfade', 10000, 'crossfade planned');
+  assert.equal(s.am.nextItem, q2);
+  assert.closeTo(s.am.plan.out.at, s.B.duration - 7, 1e-9, '7 s before the end (the eased-back tempo is 1)');
+  assert.equal(s.A.targetRate, 1, 'the next song parked at its own tempo');
+  assert.equal(s.A.mix.eq.low, 0, 'and with its bass');
+
+  // 3. pause inside the crossfade: everything holds; play continues the fade where it stopped
+  await until(() => s.am.state === 'mixing', 200000, 'crossfade');
+  const t0 = s.A.last('playAt')[1];
+  await sleep(2000);
+  assert(player.pause());
+  const tP = now();
+  assert.equal(player.state, 'paused');
+  assert(!s.A.playing && !s.B.playing);
+  const prog = s.am.progress;
+  assert.closeTo(prog, (tP - t0) / 7, 1e-9);
+  await sleep(10000);
+  assert.closeTo(s.am.progress, prog, 1e-12);
+  assert.equal(s.am.currentDeck, 1, 'no handover while paused');
+  assert(player.play());
+  assert.equal(player.state, 'mixing');
+  const tr = s.A.last('playAt')[1];
+  assert.equal(s.B.last('playAt')[1], tr, 'both decks restart together');
+  const sch = s.mixer.last('schedule');
+  assert.deepEqual(sch.slice(0, 3), ['schedule', 1, -1]);
+  assert.closeTo(sch[3], t0 + (tr - tP), 1e-9);
+  assert.closeTo(sch[4], 7, 1e-9);
+  await until(() => s.am.currentDeck === 0 && s.am.state === 'playing', 30000, 'crossfade handover');
+  assert.equal(s.playlist.current, q2);
+  assert.equal(player.nowPlaying.item, q2);
+
+  // 4. back at 30 s restarts the song; back at 3 s goes to the previous one
+  const start2 = s.A.track.firstBeat;
+  await until(() => s.A.position > start2 + 30, 60000, '30 s into the song');
+  assert(player.previous());
+  assert.closeTo(s.A.last('seek')[1], start2, 1e-9, 'restarted from its first beat');
+  assert.equal(s.A.playing, true);
+  assert.equal(s.playlist.current, q2);
+  await sleep(3000);
+  assert(player.previous());
+  assert.equal(s.am.pendingItem, q1);
+  assert.equal(player.state, 'loading');
+  await until(() => s.playlist.current === q1 && s.am.state === 'playing', 10000, 'back on the previous song');
+  assert.equal(s.am.currentDeck, 1);
+  assert.equal(player.nowPlaying.item, q1);
+  assert.deepEqual(uidsOf(player.upNext), uidsOf([q2, q3]), 'the song we left is to come again');
+  assert.deepEqual(uidsOf(player.history), [q0.uid]);
+
+  // 5. jumpTo a song in History: it plays now and the queue goes on after it
+  assert(player.jumpTo(q0.uid));
+  await until(() => s.playlist.current === q0 && s.am.state === 'playing', 10000, 'jumped back to the first song');
+  assert.equal(player.history.length, 0);
+  assert.deepEqual(uidsOf(player.upNext), uidsOf([q1, q2, q3]));
+  await until(() => s.am.nextReady, 10000, 'next ready');
+  assert.equal(s.am.nextItem, q1);
+
+  // 6. repeat all: from the last song the queue starts over, in a new shuffled order
+  assert(player.jumpTo(q3.uid));
+  await until(() => s.playlist.current === q3 && s.am.state === 'playing', 10000, 'on the last song');
+  await until(() => s.am.nextReady, 10000, 'next ready');
+  assert.equal(s.am.nextItem, q0, 'repeat all: the top of the queue is next');
+  const round1 = uidsOf(s.playlist.items);
+  await until(() => s.playlist.current === q0 && s.am.state === 'playing', 300000, 'the queue started over');
+  const round2 = uidsOf(s.playlist.items);
+  assert.equal(round2[0], q0.uid);
+  assert.deepEqual(round2.slice().sort(), round1.slice().sort());
+  assert.notDeepEqual(round2.slice(1), round1.slice(1), 'reshuffled for the new round');
+  assert(s.playlist.items.every((it) => !s.playlist.isPlayed(it.uid)), 'everything unplayed again');
+  assert.equal(s.log.finished, 0);
+  assert.equal(player.shuffle, true);
+
+  // 7. repeat one: the same song is prepared on the other deck and mixed into itself; next still moves on
+  assert(player.setRepeat('one'));
+  const curDeck = s.am.currentDeck;
+  const sameSong = () => {
+    const a = s.decks[curDeck].track;
+    const b = s.decks[1 - curDeck].track;
+    return !!a && !!b && a.libraryId === b.libraryId && a.demoId === b.demoId;
+  };
+  await until(() => s.am.nextReady && s.am.nextItem === q0 && sameSong(), 10000, 'the same song prepared');
+  await until(() => s.am.currentDeck === 1 - curDeck && s.am.state === 'playing', 300000, 'mixed into itself');
+  assert.equal(s.playlist.current, q0, 'still the same song');
+  const following = s.playlist.items[1];
+  await until(() => s.am.nextReady, 10000, 'next ready');
+  assert(player.next());
+  await until(() => s.playlist.current === following && s.am.state === 'playing', 10000, 'skipped on');
+  assert.equal(player.repeat, 'one');
+
+  assert(states.includes('loading') && states.includes('mixing') && states.includes('paused'));
+  assert.deepEqual(s.log.takeovers, [], 'the player never looked like a takeover');
+  assert.deepEqual(s.log.errors, []);
+  player.dispose();
+  s.done();
+});
+
+test('a prepared mix into a song that left the queue is called off; Clear queue lets the current song play out', async () => {
+  const s = setup({ items: ['s1', 's2', 's3'] });
+  await startedAndReady(s);
+  await until(() => s.am.state === 'preparing', 200000, 'mix into s2 scheduled');
+  const [, b, c] = s.playlist.items;
+  assert(s.B.playing, '(its start is on the audio clock)');
+  s.playlist.remove(b.uid);
+  assert.equal(s.am.state, 'playing');
+  assert.equal(s.B.playing, false, 'the scheduled start was undone');
+  assert.equal(s.am.nextItem, c);
+  await until(() => s.am.currentDeck === 1 && s.am.state === 'playing', 30000, 'mixed into s3 instead');
+  assert.equal(s.B.track.libraryId, 's3');
+  assert.equal(s.playlist.current, c);
+  assert.deepEqual(s.log.takeovers, []);
+  s.done();
+
+  const q = setup({ items: ['s1', 's2', 's3'] });
+  const player = playerFor(q);
+  await startedAndReady(q);
+  await until(() => q.am.state === 'preparing', 200000, 'mix into s2 scheduled');
+  assert.equal(player.clearQueue(), 2);
+  assert.equal(q.playlist.items.length, 1);
+  assert.equal(q.am.state, 'playing');
+  assert.equal(q.B.playing, false);
+  assert.equal(q.am.nextItem, null);
+  assert.equal(q.B.mix.eq.low, 0, 'the prepared deck got its bass back');
+  await until(() => q.log.finished === 1, 60000, 'the current song played out');
+  assert.equal(q.B.count('playAt'), 1, 'the removed song never started (only the cancelled schedule)');
+  assert.equal(player.state, 'stopped');
+  player.dispose();
+  q.done();
+});
+
+test("repeat 'all': a next song dragged to the top while songs are still to come is moved back, not a new round", async () => {
+  const s = setup({ items: ['s1', 's2', 's3'], settings: { playerRepeat: 'all' } });
+  await startedAndReady(s);
+  await until(() => s.am.state === 'preparing', 200000, 'mix into s2 scheduled');
+  const [a, b, c] = s.playlist.items;
+  s.playlist.move(b.uid, 0);
+  await until(() => s.am.currentDeck === 1 && s.am.state === 'playing', 30000, 'handover');
+  assert.deepEqual(uidsOf(s.playlist.items), [a.uid, b.uid, c.uid]);
+  assert.equal(s.playlist.currentIndex, 1);
+  assert(s.playlist.isPlayed(a.uid), 'the first song stays played (it does not come again before s3)');
+  await until(() => s.am.nextReady, 5000, 'next ready');
+  assert.equal(s.am.nextItem.id, 's3');
+  s.done();
+});
+
+test('skip while the song was stopped on the DECKS page: the next song becomes current without a sound, like a pause', async () => {
+  const s = setup();
+  await startedAndReady(s);
+  await sleep(5000);
+  s.A.pause(); // the user stops deck A by hand (outside a mix: no takeover)
+  assert.equal(s.am.paused, true);
+  assert(s.am.skip());
+  assert.equal(s.am.currentDeck, 1);
+  assert.equal(s.B.playing, false, 'no sound');
+  assert.equal(s.A.playing, false);
+  assert.equal(s.am.paused, true);
+  assert.equal(s.playlist.currentIndex, 1);
+  assert.closeTo(s.B.position, 0.1, 1e-9, 'parked at its start');
+  assert(s.am.resume());
+  assert.equal(s.B.playing, true);
+  assert.deepEqual(s.log.takeovers, []);
+  s.done();
+});
+
+test('back() in a meet mix restarts the song at its own tempo; in a cut mix the pending echo-out stop is called off', async () => {
+  const s = setup({ items: ['s1', 's3'] }); // 128 -> 140 BPM: the tempos meet half way
+  await startedAndReady(s);
+  assert.equal(s.am.plan.mode, 'meet');
+  await until(() => s.am.state === 'mixing', 200000, 'meet mix');
+  assert(Math.abs(s.A.targetRate - 1) > 0.01, 'the pre-ramp moved the current song');
+  await sleep(1000);
+  assert(s.am.back());
+  assert.equal(s.A.targetRate, 1, 'back at its own tempo');
+  assert.deepEqual(s.A.last('rampTempo').slice(1, 3), [1, 0]);
+  assert.closeTo(s.A.last('seek')[1], 0, 1e-9);
+  assert.equal(s.A.playing, true);
+  assert.equal(s.B.playing, false);
+  assert.equal(s.am.plan.mode, 'meet', 're-planned from the original tempo');
+  assert.deepEqual(s.log.takeovers, []);
+  s.done();
+
+  const c = setup({ items: ['s1', 's4'] }); // s4 has no BPM: a cut with an echo out
+  await startedAndReady(c);
+  assert.equal(c.am.plan.mode, 'cut');
+  await until(() => c.am.state === 'mixing', 200000, 'cut mix');
+  await sleep(500);
+  assert.equal(c.A.count('echoOut'), 1);
+  const n = c.A.calls.length;
+  assert(c.am.back());
+  const after = c.A.calls.slice(n).map((x) => x[0]);
+  assert(after.includes('pause') && after.lastIndexOf('play') > after.indexOf('pause'),
+    'a transport command cancels the echo out stopping the deck');
+  assert.equal(c.A.playing, true);
+  assert.equal(c.am.state, 'playing');
+  c.done();
+});
+
+test('jumpTo while paused plays that song (from its start, no fade); also during a paused mix; skip / back keep the pause', async () => {
+  const s = setup({ items: ['s1', 's2', 's3', 's4'] });
+  await startedAndReady(s);
+  await sleep(5000);
+  assert(s.am.pause());
+  const [, b, , d] = s.playlist.items;
+  // the prepared next song: switched to and started at once
+  assert(s.am.jumpTo(b.uid));
+  assert.equal(s.am.currentDeck, 1);
+  assert.equal(s.am.paused, false);
+  assert.equal(s.B.playing, true);
+  assert.closeTo(s.B.last('seek')[1], 0.1, 1e-9, 'from its start');
+  assert.equal(s.B.count('playAt'), 0, 'no fade');
+  assert.equal(s.A.playing, false);
+  assert.equal(s.playlist.current, b);
+  // a song that still has to load: the player waits for it (still paused), then plays it
+  await until(() => s.am.nextReady, 5000, 'next ready');
+  assert(s.am.pause());
+  assert(s.am.jumpTo(d.uid));
+  assert.equal(s.am.pendingItem, d);
+  assert.equal(s.am.paused, true, 'still paused while it loads');
+  await until(() => s.playlist.current === d, 5000, 'on s4');
+  assert.equal(s.am.paused, false);
+  assert.equal(s.A.playing, true);
+  assert.equal(s.A.track.libraryId, 's4');
+  assert.equal(s.B.playing, false);
+  assert.deepEqual(s.log.takeovers, []);
+  s.done();
+
+  // a paused mix: jumpTo the incoming song completes the mix and plays it
+  const m = setup();
+  await startedAndReady(m);
+  await until(() => m.am.state === 'mixing', 200000, 'mixing');
+  await sleep(2000);
+  assert(m.am.pause());
+  assert(m.am.jumpTo(m.playlist.items[1].uid));
+  assert.equal(m.am.currentDeck, 1);
+  assert.equal(m.am.state, 'playing');
+  assert.equal(m.am.paused, false);
+  assert.equal(m.B.playing, true);
+  assert.equal(m.A.playing, false);
+  assert.deepEqual(m.mixer.last('set').slice(0, 3), ['set', 1, 'auto']);
+  // skip while paused still keeps the pause
+  await until(() => m.am.nextReady, 5000, 'next ready');
+  assert(m.am.pause());
+  assert(m.am.skip());
+  assert.equal(m.am.currentDeck, 0);
+  assert.equal(m.am.paused, true);
+  assert.equal(m.A.playing, false);
+  assert.deepEqual(m.log.takeovers, []);
+  m.done();
 });

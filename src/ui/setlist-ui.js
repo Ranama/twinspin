@@ -8,7 +8,8 @@
 
 import { h, icon, setKids, setText, setClass, setAttr } from './dom.js';
 import { songMeta } from './format.js';
-import { setListBadge, dragTargetIndex, dragShift, autoScrollStep, itemTitle } from './automix-text.js';
+import { setListBadge, itemTitle } from './automix-text.js';
+import { DragReorder } from './drag-reorder.js';
 
 const MIX_LENGTHS = [16, 32, 64];
 
@@ -16,12 +17,20 @@ export class SetListUI {
   /** @param {object} app the AppUI (playlist, automix, settings, library, decks, dialog, toast(), loaders) */
   constructor(app) {
     this.app = app;
-    this.drag = null;
     this.scroller = null;
     this._pending = false;
     this._focusUid = null;
     this._rows = [];
     this._build();
+    this.dragger = new DragReorder({
+      list: this.list,
+      rows: () => this._rows,
+      scroller: () => this.scroller,
+      onDrop: (uid, to) => this._move(uid, to),
+      onEnd: () => {
+        if (this._pending) this.render();
+      },
+    });
   }
 
   get playlist() {
@@ -121,7 +130,7 @@ export class SetListUI {
 
   /** Rebuild the rows (playlist 'change'). Deferred while a row is being dragged. */
   render() {
-    if (this.drag) {
+    if (this.dragger.active) {
       this._pending = true;
       return;
     }
@@ -246,113 +255,13 @@ export class SetListUI {
     this._move(uid, to);
   }
 
-  // ---- drag to reorder (pointer events on the handle only) -----------------------------------------------------
+  // ---- drag to reorder (pointer events on the handle only; drag-reorder.js) -------------------------------------
 
   _dragStart(e, uid) {
-    if (this.drag) return;
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    const from = this._rows.findIndex((r) => r.uid === uid);
-    if (from < 0) return;
-    e.preventDefault();
-    const r = this._rows[from];
-    let rowH = 0;
-    try {
-      const rect = r.el.getBoundingClientRect();
-      rowH = rect && rect.height > 0 ? rect.height : 0;
-    } catch {
-      rowH = 0;
-    }
-    const sc = this.scroller;
-    this.drag = {
-      pid: e.pointerId, uid, from, to: from, y0: e.clientY, y: e.clientY, rowH: rowH || 60,
-      scroll0: sc ? sc.scrollTop : 0, raf: 0, handle: r.handle,
-    };
-    try {
-      r.handle.setPointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    setClass(r.el, 'dragging', true);
-    setClass(this.list, 'is-dragging', true);
-    const d = this.drag;
-    d.onMove = (ev) => {
-      if (ev.pointerId !== d.pid) return;
-      d.y = ev.clientY;
-      this._dragLayout();
-    };
-    d.onUp = (ev) => {
-      if (ev.pointerId !== d.pid) return;
-      this._dragEnd(ev.type === 'pointerup');
-    };
-    r.handle.addEventListener('pointermove', d.onMove);
-    r.handle.addEventListener('pointerup', d.onUp);
-    r.handle.addEventListener('pointercancel', d.onUp);
-    r.handle.addEventListener('lostpointercapture', d.onUp);
-    this._dragTick();
-  }
-
-  _dragLayout() {
-    const d = this.drag;
-    if (!d) return;
-    const sc = this.scroller;
-    const dy = d.y - d.y0 + (sc ? sc.scrollTop - d.scroll0 : 0);
-    d.to = dragTargetIndex(d.from, dy, d.rowH, this._rows.length);
-    this._rows.forEach((r, i) => {
-      const y = i === d.from ? dy : dragShift(i, d.from, d.to, d.rowH);
-      r.el.style.transform = y ? `translateY(${Math.round(y)}px)` : '';
-    });
-  }
-
-  _dragTick() {
-    const d = this.drag;
-    if (!d || typeof requestAnimationFrame !== 'function') return;
-    d.raf = requestAnimationFrame(() => {
-      const dd = this.drag;
-      if (!dd) return;
-      const sc = this.scroller;
-      if (sc && typeof sc.getBoundingClientRect === 'function') {
-        let rect = null;
-        try {
-          rect = sc.getBoundingClientRect();
-        } catch {
-          rect = null;
-        }
-        const step = rect ? autoScrollStep(dd.y, rect.top, rect.bottom) : 0;
-        if (step) {
-          const before = sc.scrollTop;
-          sc.scrollTop = before + step;
-          if (sc.scrollTop !== before) this._dragLayout();
-        }
-      }
-      this._dragTick();
-    });
-  }
-
-  _dragEnd(commit) {
-    const d = this.drag;
-    if (!d) return;
-    this.drag = null;
-    if (d.raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(d.raf);
-    const hd = d.handle;
-    hd.removeEventListener('pointermove', d.onMove);
-    hd.removeEventListener('pointerup', d.onUp);
-    hd.removeEventListener('pointercancel', d.onUp);
-    hd.removeEventListener('lostpointercapture', d.onUp);
-    try {
-      if (hd.hasPointerCapture && hd.hasPointerCapture(d.pid)) hd.releasePointerCapture(d.pid);
-    } catch {
-      /* ignore */
-    }
-    for (const r of this._rows) {
-      r.el.style.transform = '';
-      setClass(r.el, 'dragging', false);
-    }
-    setClass(this.list, 'is-dragging', false);
-    if (commit && d.to !== d.from) this._move(d.uid, d.to);
-    else if (this._pending) this.render();
+    this.dragger.start(e, uid);
   }
 
   destroy() {
-    if (this.drag) this._dragEnd(false);
+    this.dragger.cancel();
   }
 }

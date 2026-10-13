@@ -98,6 +98,7 @@ export function collectDiagnostics(app) {
     })),
     library: { persistent: app.library ? app.library.persistent : '-' },
     automix: automixInfo(app),
+    player: playerInfo(app),
     userAgent: ua,
   };
 }
@@ -119,6 +120,20 @@ function automixInfo(app) {
     };
   } catch {
     return { available: !!am };
+  }
+}
+
+/** Music player state for the diagnostics block (never throws). */
+function playerInfo(app) {
+  const p = app.player;
+  if (!p) return { available: false };
+  try {
+    return {
+      available: true, state: p.state, shuffle: !!p.shuffle, repeat: p.repeat, transition: p.transition,
+      upNext: Array.isArray(p.upNext) ? p.upNext.length : '-',
+    };
+  } catch {
+    return { available: true };
   }
 }
 

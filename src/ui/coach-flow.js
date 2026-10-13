@@ -24,7 +24,8 @@ export class CoachFlow {
     if (!force && app.settings.get('tipsSeen')) return;
     if (!app.audioOn) return;
     this.step = 0;
-    if (app.layout === 'pp' && app.page !== 'decks') app.setPage('decks');
+    // the tips point at the records: leave the full-screen player page (and, on phones, the other pages)
+    if (app.page === 'player' || (app.layout === 'pp' && app.page !== 'decks')) app.setPage('decks');
     this._show();
   }
 

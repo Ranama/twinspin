@@ -14,9 +14,19 @@
 // the song that followed it is still next. The current position is not saved (a reload starts at the top).
 // Saved library songs are dropped from the list when the library no longer has them, but only after the
 // library has read its stored list (library.loaded), so a slow IndexedDB never empties the set list.
-// Contract: docs/AUTOMIX.md section 4.3.
+// The set list is also the music player's queue (docs/PLAYER.md section 2):
+//   playlist.addNext(entry);          // "Play next": right after the current song (add() = "Add to queue")
+//   playlist.setShuffle(true);        // the UPCOMING songs in random order (settings.playerShuffle)
+//   playlist.setShuffle(false);       // back to the order they had before (songs added meanwhile at the end)
+//   playlist.previous();  playlist.rewind();  playlist.peekNext({ repeat: 'all' | 'one' });
+//   playlist.reshuffle();             // shuffle on: the upcoming songs in a new random order (repeat all, a new round)
+// While shuffle is on, add() puts each new song at a random upcoming position and addNext() right next. The
+// order from before shuffling is remembered in memory only: after a reload, shuffle off keeps the order.
+// Shuffling uses a seedable PRNG (`random` option, default mulberry32 with a random seed), so tests are exact.
+// Contract: docs/AUTOMIX.md section 4.3, docs/PLAYER.md section 2.
 
 import { Emitter } from '../core/emitter.js';
+import { mulberry32 } from '../core/util.js';
 import { DEMO_TRACKS } from '../audio/demo-synth.js';
 
 /** Length of the synthesised demo tracks (demo-synth.js default). */
@@ -28,6 +38,11 @@ let uidSeq = 0;
 function newUid() {
   uidSeq = (uidSeq + 1) % 1679616;
   return `sl${uidSeq.toString(36)}${Math.floor(Math.random() * 1679616).toString(36)}`;
+}
+
+/** A seed for the default shuffle PRNG (any 32-bit value; tests pass their own `random`). */
+function randomSeed() {
+  return (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) >>> 0;
 }
 
 /** "Artist - Title.mp3" -> "Artist - Title" (underscores to spaces), '' for nothing. */
@@ -66,10 +81,11 @@ export function itemRef(entry) {
 
 export class Playlist extends Emitter {
   /**
-   * @param {{ settings?: import('../core/settings.js').Settings, library?: import('../library/library.js').Library }}
-   *   deps settings for persistence (settings.setList), library for titles / BPM / duration and blobs
+   * @param {{ settings?: import('../core/settings.js').Settings, library?: import('../library/library.js').Library,
+   *   random?: () => number }} deps settings for persistence (settings.setList, settings.playerShuffle), library
+   *   for titles / BPM / duration and blobs, random: a PRNG returning [0, 1) for shuffling (tests: mulberry32(seed))
    */
-  constructor({ settings = null, library = null } = {}) {
+  constructor({ settings = null, library = null, random = null } = {}) {
     super();
     this.settings = settings;
     this.library = library;
@@ -79,6 +95,9 @@ export class Playlist extends Emitter {
     this._cur = null;            // uid of the current song
     this._saving = false;
     this._sawLibraryChange = false;
+    this._rand = typeof random === 'function' ? random : mulberry32(randomSeed());
+    this._shuffle = this._setting('playerShuffle') === true;
+    this._order = null;          // uids in the order before shuffling (null: nothing remembered)
     this._restore(this._setting('setList'));
     if (library && typeof library.on === 'function') {
       library.on('change', () => {
@@ -91,6 +110,8 @@ export class Playlist extends Emitter {
         if (key === 'setList' && !this._saving) {
           this._restore(value);
           this._changed(false);
+        } else if (key === 'playerShuffle' && !this._saving) {
+          this.setShuffle(value === true); // changed elsewhere (Settings sheet, Reset all settings)
         }
       });
     }
@@ -134,9 +155,23 @@ export class Playlist extends Emitter {
     return i >= 0 && i < this.currentIndex;
   }
 
-  /** The song after the current one (the first song when none is current), or null at the end. */
-  peekNext() {
-    return this._items[this.currentIndex + 1] || null;
+  /**
+   * The song after the current one (the first song when none is current), or null at the end.
+   * opts.repeat 'all': the first song after the last one; 'one': the current song itself.
+   * @param {{ repeat?: 'off'|'all'|'one' }} [opts]
+   */
+  peekNext(opts) {
+    const repeat = opts && opts.repeat;
+    const i = this.currentIndex;
+    if (repeat === 'one' && i >= 0) return this._items[i];
+    const next = this._items[i + 1] || null;
+    if (next || repeat !== 'all') return next;
+    return this._items[0] || null;
+  }
+
+  /** Upcoming songs are in random order (settings.playerShuffle). */
+  get shuffle() {
+    return this._shuffle;
   }
 
   // ---------------------------------------------------------------------------------------------------------
@@ -144,25 +179,92 @@ export class Playlist extends Emitter {
 
   /**
    * Add songs (one entry or an array): library entries, library demo entries, { kind: 'demo', id } or
-   * { kind: 'library', id }. Duplicates are allowed on purpose. opts.at inserts at that index (default: the end).
+   * { kind: 'library', id }. Duplicates are allowed on purpose. opts.at inserts at that index (default: the end;
+   * while shuffle is on, each song goes to a random upcoming position instead).
    * @returns {object[]} the new items
    */
   add(entries, { at } = {}) {
-    const list = Array.isArray(entries) ? entries : [entries];
-    const room = MAX_SET_LIST - this._items.length;
-    const added = [];
-    for (const e of list) {
-      if (added.length >= room) break;
-      const ref = itemRef(e);
-      if (!ref) continue;
-      added.push(this._makeItem(newUid(), ref, e));
-    }
+    const added = this._newItems(entries);
     if (!added.length) return [];
     const n = this._items.length;
-    const i = Number.isFinite(at) ? Math.max(0, Math.min(n, Math.floor(at))) : n;
-    this._items.splice(i, 0, ...added);
+    if (Number.isFinite(at)) {
+      this._items.splice(Math.max(0, Math.min(n, Math.floor(at))), 0, ...added);
+    } else if (this._shuffle) {
+      for (const it of added) {
+        const lo = this.currentIndex + 1;
+        const span = this._items.length - lo + 1;
+        this._items.splice(lo + Math.min(span - 1, Math.floor(this._rand() * span)), 0, it);
+      }
+    } else {
+      this._items.push(...added);
+    }
     this._changed(true);
     return added;
+  }
+
+  /**
+   * "Play next": add songs right after the current one (at the top when none is current), in the given order,
+   * shuffle or not. @returns {object[]} the new items
+   */
+  addNext(entries) {
+    return this.add(entries, { at: this.currentIndex + 1 });
+  }
+
+  /**
+   * Shuffle on: the songs after the current one go into random order (the order before is remembered).
+   * Shuffle off: the songs still upcoming go back into that order; songs added meanwhile follow them at the end.
+   * Saved in settings.playerShuffle. Returns true when something changed.
+   */
+  setShuffle(on) {
+    const want = !!on;
+    if (want === this._shuffle) return false;
+    this._shuffle = want;
+    if (want) {
+      this._order = this._items.map((it) => it.uid);
+      this._shuffleUpcoming();
+    } else {
+      this._unshuffle();
+      this._order = null;
+    }
+    this._save('playerShuffle', want);
+    this._changed(true);
+    return true;
+  }
+
+  /**
+   * While shuffle is on: the songs after the current one in a new random order (Auto Mix calls it when repeat all
+   * starts the list over, so every round sounds different). The order from before shuffling is still the one
+   * shuffle off goes back to. Returns true when it shuffled.
+   */
+  reshuffle() {
+    if (!this._shuffle || this._items.length - (this.currentIndex + 1) < 2) return false;
+    this._shuffleUpcoming();
+    this._changed(true);
+    return true;
+  }
+
+  /** Fisher-Yates over the songs after the current one. */
+  _shuffleUpcoming() {
+    const lo = this.currentIndex + 1;
+    for (let i = this._items.length - 1; i > lo; i--) {
+      const j = lo + Math.floor(this._rand() * (i - lo + 1));
+      const t = this._items[i];
+      this._items[i] = this._items[j];
+      this._items[j] = t;
+    }
+  }
+
+  /** The upcoming songs back in the remembered order; songs it does not know keep their order at the end. */
+  _unshuffle() {
+    const order = this._order;
+    if (!order) return;
+    const rank = new Map();
+    order.forEach((uid, i) => rank.set(uid, i));
+    const lo = this.currentIndex + 1;
+    const up = this._items.slice(lo);
+    const known = up.filter((it) => rank.has(it.uid)).sort((a, b) => rank.get(a.uid) - rank.get(b.uid));
+    const added = up.filter((it) => !rank.has(it.uid));
+    this._items = this._items.slice(0, lo).concat(known, added);
   }
 
   /** Remove one song. Removing the current song makes the one before it current (the next stays next). */
@@ -173,6 +275,35 @@ export class Playlist extends Emitter {
     this._items.splice(i, 1);
     this._changed(true);
     return true;
+  }
+
+  /**
+   * Remove several songs at once (one save, one 'change'); the current song is handled like remove().
+   * @param {string[]} uids
+   * @returns {number} how many were removed
+   */
+  removeMany(uids) {
+    const gone = new Set(Array.isArray(uids) ? uids : []);
+    if (!gone.size) return 0;
+    let cur = this._cur;
+    if (cur !== null && gone.has(cur)) {
+      // like remove(): the nearest song before it that stays becomes current
+      let i = this.indexOf(cur) - 1;
+      while (i >= 0 && gone.has(this._items[i].uid)) i--;
+      cur = i >= 0 ? this._items[i].uid : null;
+    }
+    const kept = this._items.filter((it) => !gone.has(it.uid));
+    const n = this._items.length - kept.length;
+    if (!n) return 0;
+    this._items = kept;
+    this._cur = cur;
+    this._changed(true);
+    return n;
+  }
+
+  /** "Clear queue": remove every song after the current one (all of them when none is current). */
+  clearUpcoming() {
+    return this.removeMany(this._items.slice(this.currentIndex + 1).map((it) => it.uid));
   }
 
   /** Move a song to position `toIndex` (clamped). The current song stays current wherever it ends up. */
@@ -215,6 +346,27 @@ export class Playlist extends Emitter {
     this._cur = next.uid;
     this._changed(false);
     return next;
+  }
+
+  /** Step back: the song before the current one becomes current and is returned; null at the top (no change). */
+  previous() {
+    const i = this.currentIndex;
+    if (i <= 0) return null;
+    const it = this._items[i - 1];
+    this._cur = it.uid;
+    this._changed(false);
+    return it;
+  }
+
+  /** Repeat all: every song counts as unplayed again and the first one is current (returned; null when empty). */
+  rewind() {
+    const first = this._items[0] || null;
+    const uid = first ? first.uid : null;
+    if (uid !== this._cur) {
+      this._cur = uid;
+      this._changed(false);
+    }
+    return first;
   }
 
   // ---------------------------------------------------------------------------------------------------------
@@ -317,16 +469,34 @@ export class Playlist extends Emitter {
   /** Publish a new items view, save when the order or contents changed, emit 'change'. */
   _changed(save) {
     this._view = Object.freeze(this._items.slice());
-    if (save && this.settings && typeof this.settings.set === 'function') {
-      this._saving = true;
-      try {
-        this.settings.set('setList', this._items.map((it) => ({ kind: it.kind, id: it.id })));
-      } catch (err) {
-        console.warn('[TwinSpin] set list could not be saved', err);
-      } finally {
-        this._saving = false;
-      }
-    }
+    if (save) this._save('setList', this._items.map((it) => ({ kind: it.kind, id: it.id })));
     this.emit('change');
+  }
+
+  /** settings.set without hearing our own change back; a missing or broken store just means no saving. */
+  _save(key, value) {
+    if (!this.settings || typeof this.settings.set !== 'function') return;
+    this._saving = true;
+    try {
+      this.settings.set(key, value);
+    } catch (err) {
+      console.warn(`[TwinSpin] ${key} could not be saved`, err);
+    } finally {
+      this._saving = false;
+    }
+  }
+
+  /** Items for add() / addNext(): valid entries only, up to the cap. */
+  _newItems(entries) {
+    const list = Array.isArray(entries) ? entries : [entries];
+    const room = MAX_SET_LIST - this._items.length;
+    const added = [];
+    for (const e of list) {
+      if (added.length >= room) break;
+      const ref = itemRef(e);
+      if (!ref) continue;
+      added.push(this._makeItem(newUid(), ref, e));
+    }
+    return added;
   }
 }

@@ -3,7 +3,7 @@
 // cut, incl. half and double time), return durations, the crossfade S-curve and whole transitions.
 import {
   musicalBounds, chooseInPoint, chooseOutPoint, lateOutPoint, planTempo, returnSeconds, crossfadeAt, planTransition,
-  MATCH_MAX, MEET_MAX,
+  MATCH_MAX, MEET_MAX, transitionStyleOf, crossfadeSecondsOf, isBeatMatched, quickTransition, GAPLESS_FADE, QUICK_FADE,
 } from '../src/deck/automix-plan.js';
 import { beatsAt, timeOfBeat } from '../src/deck/sync-math.js';
 
@@ -312,4 +312,127 @@ test('planTransition follows a beat map (tempo drift)', () => {
   // the constant grid would be off by more than a beat there
   const gridAt = timeOfBeat(plan.out.beat, 122, 0.1, null);
   assert(Math.abs(gridAt - plan.out.at) > 0.1, `grid ${gridAt} vs map ${plan.out.at}`);
+});
+
+// ---- transition styles and the player's quick fade (docs/PLAYER.md section 3) ----------------------------------
+
+test('style settings: transitionStyleOf, crossfadeSecondsOf, isBeatMatched', () => {
+  assert.equal(transitionStyleOf(null), 'dj');
+  assert.equal(transitionStyleOf({}), 'dj');
+  assert.equal(transitionStyleOf({ transitionStyle: 'crossfade' }), 'crossfade');
+  assert.equal(transitionStyleOf({ get: (k) => (k === 'transitionStyle' ? 'gapless' : undefined) }), 'gapless');
+  assert.equal(transitionStyleOf({ transitionStyle: 'disco' }), 'dj');
+  assert.equal(crossfadeSecondsOf({}), 6);
+  assert.equal(crossfadeSecondsOf({ crossfadeSec: 9 }), 9);
+  assert.equal(crossfadeSecondsOf({ crossfadeSec: 30 }), 12);
+  assert.equal(crossfadeSecondsOf({ crossfadeSec: 0.5 }), 2);
+  assert.equal(crossfadeSecondsOf({ crossfadeSec: 'x' }), 6);
+  assert.equal(isBeatMatched({ mode: 'match' }), true);
+  assert.equal(isBeatMatched({ mode: 'meet' }), true);
+  for (const m of ['cut', 'crossfade', 'gapless']) assert.equal(isBeatMatched({ mode: m }), false, m);
+  assert.equal(isBeatMatched(null), false);
+});
+
+test('planTransition dj style is the beat-matched plan (style field), whatever else is set', () => {
+  const cur = { bpm: 128, firstBeat: 0, duration: 240, rate: 1 };
+  const next = { bpm: 125, firstBeat: 0.2, duration: 200 };
+  const dj = planTransition(cur, next, { mixBeats: 32 });
+  assert.equal(dj.style, 'dj');
+  assert.equal(dj.mode, 'match');
+  const same = planTransition(cur, next, { mixBeats: 32, transitionStyle: 'dj', crossfadeSec: 3 });
+  assert.deepEqual({ ...same, curBounds: null, nextBounds: null }, { ...dj, curBounds: null, nextBounds: null });
+});
+
+test('planTransition crossfade style: crossfadeSec ending at the musical end, own tempos, first beat in', () => {
+  const cur = { bpm: 128, firstBeat: 0, duration: 200, rate: 1, bounds: { start: 1, end: 190 } };
+  const next = { bpm: 120, firstBeat: 0.3, duration: 180, bounds: { start: 2, end: 175 } };
+  const p = planTransition(cur, next, { transitionStyle: 'crossfade', crossfadeSec: 8, mixBeats: 64 });
+  assert.equal(p.style, 'crossfade');
+  assert.equal(p.mode, 'crossfade');
+  assert.closeTo(p.out.at, 182, 1e-9, '8 s before the musical end (190 s)');
+  assert.closeTo(p.fadeSec, 8, 1e-9);
+  assert.closeTo(p.out.at + p.fadeSec, cur.bounds.end, 1e-9, 'the fade ends with the music');
+  assert.equal(p.beats, 0);
+  assert.equal(p.out.beat, null);
+  assert.closeTo(p.in.at, 2.3, 1e-9, 'the next song starts on its first beat (beats at 0.3 + 0.5 k)');
+  assert.equal(p.in.beat, 4);
+  assert.equal(p.tempo.nextStartRate, 1);
+  assert.equal(p.tempo.curTargetRate, 1);
+  assert.equal(p.tempo.preRampBeats, 0);
+  assert.equal(p.tempo.returnSeconds, 0);
+  assert.equal(p.multiplier, 1);
+  assert.equal(p.bassSwap, false);
+  assert.equal(p.echoOut, false);
+  assert.equal(p.late, false);
+  // the current song plays faster: the out-point moves back so the fade still lasts 8 s
+  const fast = planTransition({ ...cur, rate: 1.05 }, next, { transitionStyle: 'crossfade', crossfadeSec: 8 });
+  assert.closeTo(fast.out.at, 190 - 8 * 1.05, 1e-9);
+  assert.closeTo(fast.fadeSec, 8, 1e-9);
+  // tempos far apart or unknown make no difference
+  const nb = planTransition({ bpm: null, duration: 100, rate: 1 }, { bpm: null, duration: 100, bounds: { start: 1.7, end: 99 } },
+    { transitionStyle: 'crossfade' });
+  assert.equal(nb.mode, 'crossfade');
+  assert.closeTo(nb.out.at, 94, 1e-9, 'default 6 s');
+  assert.closeTo(nb.in.at, 1.7, 1e-9, 'no BPM: where the music starts');
+  assert.equal(nb.in.beat, null);
+  // a short song: at most half of its music is crossfaded
+  const short = planTransition({ bpm: 120, firstBeat: 0, duration: 10, rate: 1, bounds: { start: 0, end: 10 } }, next,
+    { transitionStyle: 'crossfade', crossfadeSec: 8 });
+  assert.closeTo(short.out.at, 5, 1e-9);
+  assert.closeTo(short.fadeSec, 5, 1e-9);
+  // late (MIX NOW / missed): from `earliest`, at most crossfadeSec and never past the music
+  const late = planTransition(cur, next, { transitionStyle: 'crossfade', crossfadeSec: 8 }, { earliest: 100 });
+  assert.equal(late.late, true);
+  assert.closeTo(late.out.at, 100, 1e-9);
+  assert.closeTo(late.fadeSec, 8, 1e-9);
+  assert.closeTo(planTransition(cur, next, { transitionStyle: 'crossfade', crossfadeSec: 8 }, { earliest: 187 }).fadeSec, 3, 1e-9);
+  assert.closeTo(planTransition(cur, next, { transitionStyle: 'crossfade' }, { earliest: 195 }).fadeSec, GAPLESS_FADE, 1e-12);
+});
+
+test('planTransition gapless style: the next song at its musical start exactly at the musical end, 15 ms fades', () => {
+  const cur = { bpm: 128, firstBeat: 0, duration: 200, rate: 1, bounds: { start: 1, end: 190 } };
+  const next = { bpm: 120, firstBeat: 0.3, duration: 180, bounds: { start: 2, end: 175 } };
+  const p = planTransition(cur, next, { transitionStyle: 'gapless', crossfadeSec: 8 });
+  assert.equal(p.style, 'gapless');
+  assert.equal(p.mode, 'gapless');
+  assert.closeTo(p.out.at, 190, 1e-12);
+  assert.equal(p.fadeSec, GAPLESS_FADE);
+  assert.equal(GAPLESS_FADE, 0.015);
+  assert.closeTo(p.in.at, 2, 1e-12, 'its musical start, not snapped to a beat');
+  assert.equal(p.tempo.nextStartRate, 1);
+  assert.equal(p.bassSwap, false);
+  assert.equal(p.echoOut, false);
+  // from a waveform: the fade tail and the leading silence are skipped
+  const wf = planTransition({ bpm: null, duration: 120, rate: 1, waveform: synthWaveform({ duration: 120, lead: 2, fadeAt: 107 }) },
+    { bpm: null, duration: 60, waveform: synthWaveform({ duration: 60, lead: 1.5, fadeAt: 55 }) }, { transitionStyle: 'gapless' });
+  assert(wf.out.at > 115 && wf.out.at < 117.2, `musical end ${wf.out.at}`);
+  assert.closeTo(wf.in.at, 1.5, 0.02);
+  // late: a quick fade (1.5 s) while there is music left, 15 ms once it is over
+  const late = planTransition(cur, next, { transitionStyle: 'gapless' }, { earliest: 100 });
+  assert.closeTo(late.out.at, 100, 1e-12);
+  assert.closeTo(late.fadeSec, QUICK_FADE, 1e-12);
+  assert.closeTo(planTransition(cur, next, { transitionStyle: 'gapless' }, { earliest: 189.5 }).fadeSec, 0.5, 1e-9);
+  assert.closeTo(planTransition(cur, next, { transitionStyle: 'gapless' }, { earliest: 191 }).fadeSec, GAPLESS_FADE, 1e-12);
+});
+
+test('quickTransition: the player skip fade (no beat matching)', () => {
+  const q = quickTransition({ outAt: 42.5, inAt: 0.3, curRate: 1.02 });
+  assert.equal(q.style, 'quick');
+  assert.equal(q.mode, 'cut');
+  assert.equal(q.quick, true);
+  assert.equal(q.late, true);
+  assert.equal(q.fadeSec, QUICK_FADE);
+  assert.equal(QUICK_FADE, 1.5);
+  assert.equal(q.beats, 0);
+  assert.deepEqual(q.out, { at: 42.5, beat: null, beats: 0 });
+  assert.deepEqual(q.in, { at: 0.3, beat: null });
+  assert.equal(q.tempo.nextStartRate, 1);
+  assert.equal(q.tempo.curTargetRate, 1.02);
+  assert.equal(q.bassSwap, false);
+  assert.equal(q.echoOut, false);
+  assert.equal(isBeatMatched(q), false);
+  const odd = quickTransition({ outAt: NaN, inAt: -3, fadeSec: 0 });
+  assert.equal(odd.out.at, 0);
+  assert.equal(odd.in.at, 0);
+  assert.equal(odd.fadeSec, QUICK_FADE);
 });

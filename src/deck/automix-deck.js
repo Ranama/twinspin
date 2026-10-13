@@ -5,10 +5,12 @@
 //   await loadItem(deck, item, library, () => stillWanted);   await waitAnalysis(deck, 30000, timers);
 //   parkNextDeck(deck, curDeck, plan, { touched, bassSwap });
 //   scheduleTransition(m, cur, next, mixer, t0);   undoTransition(m, cur, next, mixer, now);
+//   pauseTransition(m, cur, next, mixer, now);     resumeTransition(m, cur, next, mixer, now, lead);   (player)
+//   completeTransition(m, next, mixer);            abortTransition(m, cur, next, mixer);              (player)
 // `m` is the AutoMix session record ({ plan, cur, next, t0, dur, tSwap, swapSec, low0, from, to, ... }).
-// Contract: docs/AUTOMIX.md section 4.5.
+// Contract: docs/AUTOMIX.md section 4.5, docs/PLAYER.md section 3.
 
-import { CUT_SECONDS, musicalBounds, chooseInPoint } from './automix-plan.js';
+import { CUT_SECONDS, musicalBounds, chooseInPoint, isBeatMatched } from './automix-plan.js';
 
 /** Options for every deck call Auto Mix makes. */
 export const AUTO = Object.freeze({ source: 'auto' });
@@ -166,8 +168,9 @@ export function scheduleTransition(m, cur, next, mixer, t0) {
   const plan = m.plan;
   m.t0 = t0;
   // tempo at t0 (a pre-ramp has finished by then): the next deck follows the LIVE tempo of the current one
+  // (beat-matched plans only: 'cut', 'crossfade', 'gapless' and the player's quick fades start at rate 1)
   const curRate = targetRate(cur);
-  const nextRate = plan.mode === 'cut' || !cur.bpm || !next.bpm ? 1 : (cur.bpm * curRate * plan.multiplier) / next.bpm;
+  const nextRate = !isBeatMatched(plan) || !cur.bpm || !next.bpm ? 1 : (cur.bpm * curRate * plan.multiplier) / next.bpm;
   next.rampTempo(nextRate, 0);
   const running = next.playing && next.scheduledAt == null;
   if (running) {
@@ -235,6 +238,73 @@ export function undoTransition(m, cur, next, mixer, now) {
   settleSwap(m, cur, next, now);
 }
 
+/**
+ * Player pause during a mix: both decks stop where they are, the crossfade freezes, a bass swap that is still to
+ * come is put back (and remembered for the resume: m.swapIn), one under way finishes. An old song that is
+ * echoing out stays out. Fills m.pausedAt, m.resumeCur, m.resumeNext, m.swapIn. (Sync keeping is the caller's.)
+ */
+export function pauseTransition(m, cur, next, mixer, now) {
+  if (mixer && typeof mixer.cancelCrossfade === 'function') mixer.cancelCrossfade(AUTO);
+  m.swapIn = null;
+  if (m.tSwap !== null) {
+    if (now !== null && now < m.tSwap) m.swapIn = m.tSwap - m.t0;
+    settleSwap(m, cur, next, now);
+    m.tSwap = null;
+  }
+  m.resumeCur = !!cur.playing && !(m.plan.echoOut && m.echoDone);
+  m.resumeNext = !!next.playing;
+  if (cur.playing) cur.pause(AUTO);
+  if (next.playing) next.pause(AUTO);
+  m.pausedAt = now;
+}
+
+/**
+ * Player resume of a paused mix: both decks start again together at `now + lead` on the audio clock, the
+ * crossfade goes on along its curve from where it stopped (its start moves by the length of the pause), and a
+ * bass swap still to come is scheduled again. Returns that restart time.
+ */
+export function resumeTransition(m, cur, next, mixer, now, lead) {
+  const tr = now + lead;
+  m.t0 += tr - m.pausedAt;
+  if (m.resumeCur && cur.track) cur.playAt(tr, AUTO);
+  if (m.resumeNext && next.track) next.playAt(tr, AUTO);
+  if (!m.manualXfade && mixer && typeof mixer.scheduleCrossfade === 'function') {
+    mixer.scheduleCrossfade(m.from, m.to, m.t0, m.dur);
+  }
+  if (m.swapIn !== null && m.swapIn !== undefined) {
+    m.tSwap = m.t0 + m.swapIn;
+    cur.setEq('low', -1, { at: m.tSwap, ramp: m.swapSec, source: 'auto' });
+    next.setEq('low', 0, { at: m.tSwap, ramp: m.swapSec, source: 'auto' });
+  }
+  m.swapIn = null;
+  m.pausedAt = null;
+  return tr;
+}
+
+/**
+ * Player skip during a mix: the crossfade stops (the caller hands over to the new deck, which moves the
+ * crossfader there and stops the old deck) and the new song gets its full bass now.
+ */
+export function completeTransition(m, next, mixer) {
+  if (mixer && typeof mixer.cancelCrossfade === 'function') mixer.cancelCrossfade(AUTO);
+  next.setEq('low', 0, AUTO); // also replaces a bass swap still scheduled on the audio clock
+  m.tSwap = null;
+  m.swapIn = null;
+}
+
+/**
+ * Player back during a mix (restart the song being mixed out): the crossfade stops, both decks get their EQ from
+ * before the mix back, the incoming deck stops (the caller re-parks it and moves the crossfader back).
+ */
+export function abortTransition(m, cur, next, mixer) {
+  if (mixer && typeof mixer.cancelCrossfade === 'function') mixer.cancelCrossfade(AUTO);
+  cur.setEq('low', m.low0[0], AUTO);
+  next.setEq('low', m.low0[1], AUTO);
+  m.tSwap = null;
+  m.swapIn = null;
+  if (next.playing) next.pause(AUTO);
+}
+
 /** The deck Auto Mix should treat as current when switched on: the playing one (the louder if both). */
 export function playingDeck(decks, mixer) {
   const a = decks[0];
@@ -245,11 +315,43 @@ export function playingDeck(decks, mixer) {
   return pa ? 0 : pb ? 1 : null;
 }
 
-/** The first set-list song after the current one that is not in `skipped` (uids that failed in this run). */
-export function upcomingItem(playlist, skipped) {
+/**
+ * The first set-list song after the current one that is not in `skipped` (uids that failed in this run).
+ * repeat 'one': the current song itself; 'all' (and 'one' when the current song is skipped): from the top again
+ * after the last song.
+ * @param {'off'|'all'|'one'} [repeat]
+ */
+export function upcomingItem(playlist, skipped, repeat = 'off') {
   if (!playlist) return null;
   const items = playlist.items;
-  for (let i = playlist.currentIndex + 1; i < items.length; i++) if (!skipped.has(items[i].uid)) return items[i];
+  const ci = playlist.currentIndex;
+  if (repeat === 'one' && ci >= 0 && !skipped.has(items[ci].uid)) return items[ci];
+  for (let i = ci + 1; i < items.length; i++) if (!skipped.has(items[i].uid)) return items[i];
+  if (repeat === 'all' || repeat === 'one') {
+    for (let i = 0; i <= ci && i < items.length; i++) if (!skipped.has(items[i].uid)) return items[i];
+  }
+  return null;
+}
+
+/**
+ * The song after the one with `uid` in the set list (not in `skipped`), from the top again when `wrap`.
+ * Without a (known) uid: the first song after the current one.
+ */
+export function itemAfter(playlist, uid, skipped, wrap) {
+  if (!playlist) return null;
+  const items = playlist.items;
+  let i = uid ? playlist.indexOf(uid) : -1;
+  if (i < 0) i = playlist.currentIndex;
+  for (let k = i + 1; k < items.length; k++) if (!skipped.has(items[k].uid)) return items[k];
+  if (wrap) for (let k = 0; k <= i && k < items.length; k++) if (!skipped.has(items[k].uid)) return items[k];
+  return null;
+}
+
+/** The song before the one with `uid` in the set list (not in `skipped`), or null at the top. */
+export function itemBefore(playlist, uid, skipped) {
+  if (!playlist || !uid) return null;
+  const items = playlist.items;
+  for (let k = playlist.indexOf(uid) - 1; k >= 0; k--) if (!skipped.has(items[k].uid)) return items[k];
   return null;
 }
 
@@ -287,4 +389,25 @@ export function trackInfo(deck, isCur, cache) {
 /** Where a deck's song starts its music (chooseInPoint), 0 without a song. */
 export function inPointOf(deck, cache) {
   return deck.track ? chooseInPoint(trackInfo(deck, false, cache), boundsOf(cache, deck.track, deck.duration)) : 0;
+}
+
+/**
+ * Where a song starts when Auto Mix starts it or the player restarts it: its in-point (first beat of the
+ * music), or for the 'gapless' style its musical start (nothing before the first beat is cut).
+ */
+export function startPointOf(deck, cache, style) {
+  if (!deck.track) return 0;
+  return style === 'gapless' ? boundsOf(cache, deck.track, deck.duration).start : inPointOf(deck, cache);
+}
+
+/** A paused deck that holds this set-list item's song (not at its end), to resume it there: index or null. */
+export function deckHolding(decks, item, tailSec) {
+  let best = null;
+  for (let i = 0; i < decks.length; i++) {
+    const d = decks[i];
+    if (!d || !d.track || d.loading || d.playing || !trackIs(d.track, item)) continue;
+    if (!(d.duration > 0) || d.position >= d.duration - tailSec) continue;
+    if (best === null || d.position > decks[best].position) best = i;
+  }
+  return best;
 }

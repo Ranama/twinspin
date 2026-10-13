@@ -133,8 +133,8 @@ test('cssVars emits px values for every budget variable', () => {
 });
 
 test('pages, tabs and visibility per layout', () => {
-  assert.deepEqual(tabsFor('pp'), ['decks', 'mix', 'fx', 'songs']);
-  assert.deepEqual(tabsFor('tp'), ['mix', 'fx', 'songs']);
+  assert.deepEqual(tabsFor('pp'), ['decks', 'mix', 'fx', 'songs', 'player']); // (AppUI hides PLAYER without a Player)
+  assert.deepEqual(tabsFor('tp'), ['mix', 'fx', 'songs', 'player']);
   assert.deepEqual(tabsFor('pl'), []);
   assert.deepEqual(tabsFor('console'), []);
   assert.equal(effectivePage('pp', 'fx'), 'fx');
@@ -150,7 +150,7 @@ test('pages, tabs and visibility per layout', () => {
 
   // phone portrait: exactly one page in the middle, waveforms, crossfader and tabs always
   const pp = visibility('pp', 'decks', 'A');
-  assert.deepEqual(pp, { decks: true, mixer: false, fxA: false, fxB: false, songs: false, waves: true, tabs: true, xf: true });
+  assert.deepEqual(pp, { decks: true, mixer: false, fxA: false, fxB: false, songs: false, player: false, waves: true, tabs: true, xf: true });
   assert.equal(visibility('pp', 'fx', 'B').fxB, true);
   assert.equal(visibility('pp', 'fx', 'B').fxA, false);
   assert.equal(visibility('pp', 'mix', 'A').decks, false);

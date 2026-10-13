@@ -1,11 +1,15 @@
-// Auto Mix controls outside the Songs page: the AUTO switch in the tab bar (phone / tablet portrait), the status
-// strip ("Next: Spore Garden · mix in 0:42" with MIX NOW; "Mixing into Spore Garden 45%" with a progress bar),
-// and the planned mix markers on the overview strips. AppUI places the strip for the layout (automixPlacement in
-// layout-math.js): a row above the crossfader (pp / tp), pills over the waveforms (pl) or a row inside the
-// crossfader panel (console). It also routes the AutoMix / Playlist events to toasts and redraws.
+// Auto Mix controls outside the Songs page: the AUTO switch in the tab bar (tablet portrait; phone portrait only
+// without a Player), the status strip ("Next: Spore Garden · mix in 0:42" with MIX NOW; "Mixing into Spore Garden
+// 45%" with a progress bar) with the queue's mini transport (previous / play-pause / next, as far as it fits:
+// layout-math stripFit) and a tap on the status opening the PLAYER page, and the planned mix markers on the
+// overview strips. AppUI places the strip for the layout (automixPlacement in layout-math.js): a row above the
+// crossfader (pp / tp), pills over the waveforms (pl: with a Player the first pill opens the player and shows
+// the countdown) or a row inside the crossfader panel (console). It also routes the AutoMix / Playlist events to
+// toasts and redraws.
 //   const amui = new AutomixUI(app);  tabs.append(amui.tabBtn);  amui.bind();
-//   amui.place('row', { shell, waves, xf });  amui.setShown(true);  amui.render();   // render() every frame
-// Works without an AutoMix (older builds, tests): then every Auto Mix control stays hidden.
+//   amui.place('row', { shell, waves, xf });  amui.setShown(true);  amui.setFit(stripFit(w));  amui.render();
+// Works without an AutoMix (older builds, tests): then every Auto Mix control stays hidden; without a Player
+// (app.player) there is no transport or player pill.
 
 import { h, icon, setText, setClass, setAttr, guard } from './dom.js';
 import { automixSnapshot, automixStatus, planOutAt, planInAt, addedText, itemTitle } from './automix-text.js';
@@ -32,7 +36,8 @@ export class AutomixUI {
 
   _build() {
     const app = this.app;
-    // Tab-bar switch (pp / tp): one tap from every page.
+    const player = !!app.player;
+    // Tab-bar switch (tp; pp only without a Player): one tap from every page.
     this.tabBtn = h('button.tab.tab-auto', { type: 'button', role: 'switch', 'aria-checked': 'false',
       'aria-label': 'Auto Mix: plays the set list by itself and mixes each song into the next' },
     h('span.am-mini', { 'aria-hidden': 'true' }, h('span.am-mini-dot')), h('span.tab-text', { text: 'AUTO MIX' }));
@@ -44,14 +49,45 @@ export class AutomixUI {
     this.toggleBtn = h('button.am-toggle', { type: 'button', role: 'switch', 'aria-checked': 'false',
       'aria-label': 'Auto Mix on or off' }, h('span.am-mini', { 'aria-hidden': 'true' }, h('span.am-mini-dot')), this.toggleText);
     this.toggleBtn.addEventListener('click', () => app.toggleAutomix());
+    // phone landscape with a Player: the pill over the waveforms opens the player (Auto Mix is switched there)
+    this.pillText = h('span.am-pill-text', { text: 'PLAYER' });
+    this.playerPill = h('button.am-toggle.am-pill-player', { type: 'button', hidden: true,
+      'aria-label': 'Open the music player (queue, Auto Mix, transitions)' }, icon('player', 'am-pill-ico'), this.pillText);
+    this.playerPill.addEventListener('click', () => app.showPlayer());
     this.titleEl = h('span.am-title', { text: 'Auto Mix off' });
     this.detailEl = h('span.am-detail', { text: '' });
     this.barFill = h('span.am-bar-fill');
     this.bar = h('span.am-bar', { 'aria-hidden': 'true' }, this.barFill);
-    this.info = h('div.am-info', {}, h('span.am-line', {}, icon('auto', 'am-ico'), this.titleEl, this.detailEl), this.bar);
+    const line = h('span.am-line', {}, icon('auto', 'am-ico'), this.titleEl, this.detailEl);
+    // with a Player, the status text opens it (the whole queue, transport and transitions are there)
+    this.info = player
+      ? h('button.am-info', { type: 'button', 'aria-label': 'Auto Mix status. Open the player.' }, line, this.bar)
+      : h('div.am-info', {}, line, this.bar);
+    if (player) this.info.addEventListener('click', () => app.showPlayer());
+    // mini transport (previous / play-pause / next) for the queue, when it fits (layout-math stripFit)
+    const tb = (cls, ico, label, fn) => {
+      const b = h(`button.am-tbtn.${cls}`, { type: 'button', 'aria-label': label }, ico);
+      b.addEventListener('click', () => fn());
+      return b;
+    };
+    this.tpPrev = tb('am-prev', icon('prev'), 'Previous song', () => app.playerPrevious());
+    this.tpPlay = tb('am-play', [icon('play', 'i-play'), icon('pause', 'i-pause')], 'Pause the player', () => app.playerToggle());
+    this.tpNext = tb('am-next', icon('next'), 'Next song', () => app.playerNext());
+    this.tp = h('div.am-tp', { role: 'group', 'aria-label': 'Player', hidden: true }, this.tpPrev, this.tpPlay, this.tpNext);
     this.mixNowBtn = h('button.am-mixnow', { type: 'button', 'aria-label': 'Mix into the next song now' }, h('span', { text: 'MIX NOW' }));
     this.mixNowBtn.addEventListener('click', () => app.mixNow());
-    this.el = h('section.am-strip', { 'aria-label': 'Auto Mix', hidden: true }, this.toggleBtn, this.info, this.mixNowBtn);
+    this.el = h('section.am-strip', { 'aria-label': 'Auto Mix', hidden: true, dataset: { tp: 'none' } },
+      this.toggleBtn, this.playerPill, this.info, this.tp, this.mixNowBtn);
+    this._fit = { transport: 'none', toggleLabel: true };
+  }
+
+  /** What fits next to the status text (layout-math stripFit): the mini transport and the AUTO label. */
+  setFit(fit) {
+    if (!fit) return;
+    const f = this._fit;
+    if (f.transport === fit.transport && f.toggleLabel === fit.toggleLabel) return;
+    this._fit = { transport: fit.transport, toggleLabel: fit.toggleLabel };
+    this._dirty = true;
   }
 
   /** Subscribe to the AutoMix / Playlist events (called once by AppUI). */
@@ -201,14 +237,38 @@ export class AutomixUI {
       setClass(b, 'on', on);
     }
     setText(this.toggleText, this._where === 'waves' && on ? st.short : 'AUTO');
+    // the player: pill over the waveforms (pl), mini transport in the strip (pp / tp / console)
+    const player = app.player || null;
+    let pstate = 'stopped';
+    if (player) {
+      try {
+        pstate = player.state || 'stopped';
+      } catch {
+        pstate = 'stopped';
+      }
+    }
+    const paused = on && pstate === 'paused';
+    const pill = this._where === 'waves' && !!player;
+    this.playerPill.hidden = !pill;
+    this.toggleBtn.hidden = pill;
+    setText(this.pillText, on ? st.short : 'PLAYER');
+    setClass(this.playerPill, 'on', on);
+    this.toggleText.hidden = this._where === 'xf' && !this._fit.toggleLabel;
+    const tp = player && on && this._where !== 'waves' ? this._fit.transport : 'none';
+    this.tp.hidden = tp === 'none';
+    this.tpPrev.hidden = tp !== 'full';
+    setAttr(this.el, 'data-tp', tp);
+    setClass(this.tpPlay, 'is-playing', !paused);
+    setAttr(this.tpPlay, 'aria-label', paused ? 'Resume the player' : 'Pause the player');
     // strip
     setClass(this.el, 'on', on);
     setClass(this.el, 'mixing', st.mixing);
+    setClass(this.el, 'paused', paused);
     setText(this.titleEl, st.title);
-    setText(this.detailEl, st.detail);
+    setText(this.detailEl, paused ? 'paused' : st.detail);
     this.bar.hidden = !st.mixing;
     if (st.mixing) this.barFill.style.setProperty('--p', String((st.pct || 0) / 100));
-    this.mixNowBtn.hidden = !on || st.mixing;
+    this.mixNowBtn.hidden = !on || st.mixing || paused;
     this.mixNowBtn.disabled = !st.mixNow;
     for (const t of this._targets) guard('automix status target', () => t.update(st, on));
     this._renderMarkers();

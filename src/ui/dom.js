@@ -59,6 +59,19 @@ const ICONS = {
     '<circle cx="9" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.5" fill="currentColor" stroke="none"/>' +
     '<circle cx="9" cy="18" r="1.5" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.5" fill="currentColor" stroke="none"/>',
   listAdd: '<path d="M4 6h11M4 12h11M4 18h7M18 14v6M15 17h6"/>',
+  // Music player
+  player: '<circle cx="10.5" cy="13" r="8"/><circle cx="10.5" cy="13" r="2"/><path d="M20.5 2.5v7.5l-3.5 3.2"/>',
+  prev: '<path d="M19 19.5L9 12l10-7.5z" fill="currentColor" stroke="none"/><path d="M5.5 19V5"/>',
+  next: '<path d="M5 4.5L15 12 5 19.5z" fill="currentColor" stroke="none"/><path d="M18.5 5v14"/>',
+  shuffle: '<path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
+  repeat: '<path d="M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3"/>',
+  repeatOne: '<path d="M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3"/>' +
+    '<path d="M10.8 10.6l1.6-1.1v5" stroke-width="1.8"/>',
+  more: '<circle cx="5" cy="12" r="1.9" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.9" fill="currentColor" stroke="none"/>' +
+    '<circle cx="19" cy="12" r="1.9" fill="currentColor" stroke="none"/>',
+  playNext: '<path d="M3 6h12M3 12h7M3 18h12"/><path d="M15 9l6 3-6 3z" fill="currentColor" stroke="none"/>',
+  history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5M3.5 3.5v5h5"/><path d="M12 7.5V12l3 2"/>',
+  chevronDown: '<path d="M5 9l7 7 7-7"/>',
 };
 
 /** Inline SVG markup for an icon name (static, trusted strings only). */
@@ -190,6 +203,19 @@ export function touchedRecently(obj, ms = 250) {
 /** Stamp an object with the time of its last input (pairs with touchedRecently). */
 export function stampInput(obj) {
   if (obj) obj.__inputAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+/**
+ * Does a keyboard event's target use Space itself (a focused button, switch, link, slider, summary, text
+ * field)? Page-wide Space shortcuts stay away from these so a focused control never fires twice.
+ */
+export function usesSpaceKey(t) {
+  if (!t || !t.tagName) return false;
+  if (isTypingTarget(t)) return true;
+  const tag = t.tagName.toLowerCase();
+  if (tag === 'button' || tag === 'a' || tag === 'summary' || tag === 'input' || tag === 'label') return true;
+  const role = t.getAttribute ? t.getAttribute('role') : null;
+  return !!role && ['button', 'switch', 'radio', 'checkbox', 'slider', 'menuitem', 'tab', 'option'].includes(role);
 }
 
 /** Is a keyboard event aimed at a text field (never steal keys there)? */

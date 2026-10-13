@@ -1,22 +1,26 @@
 // AppUI: builds and runs everything the user sees outside the widgets. It creates the app shell (header chips,
-// waveforms, two decks, mixer, FX panels, songs + set list, crossfader, Auto Mix strip, tabs), picks one of four
-// layouts from the viewport (pp phone portrait, pl phone landscape, tp tablet portrait, console tablet landscape /
-// desktop; CSS does the placement from data-layout), runs the single requestAnimationFrame loop, binds widgets to
-// the Deck / Mixer / SyncController / AutoMix / Playlist APIs, and shows the start overlay, resume banner,
-// toasts, confirm dialog, coach marks and sheets.
-//   const ui = new AppUI({ root, engine, decks, sync, settings, library, playlist, automix });
-// Contract: docs/CONTRACT.md section 6.4 and docs/AUTOMIX.md section 5. Widgets come from ./widgets/*.js.
+// waveforms, two decks, mixer, FX panels, songs + set list, the music player page, crossfader, Auto Mix strip,
+// tabs), picks one of four layouts from the viewport (pp phone portrait, pl phone landscape, tp tablet portrait,
+// console tablet landscape / desktop; CSS does the placement from data-layout), runs the single
+// requestAnimationFrame loop, binds widgets to the Deck / Mixer / SyncController / AutoMix / Playlist / Player
+// APIs, and shows the start overlay, resume banner, toasts, confirm dialog, coach marks and sheets.
+//   const ui = new AppUI({ root, engine, decks, sync, settings, library, playlist, automix, player });
+// Contract: docs/CONTRACT.md section 6.4, docs/AUTOMIX.md section 5 and docs/PLAYER.md section 5. Widgets come
+// from ./widgets/*.js.
 
 import { h, icon, setText, setClass, setAttr, trackHold, guard } from './dom.js';
 import {
-  pickLayout, computeSizes, cssVars, knobStyle, effectivePage, tabsFor, visibility, automixPlacement,
+  pickLayout, computeSizes, cssVars, knobStyle, effectivePage, tabsFor, visibility, automixPlacement, playerBox,
+  playerLayout, stripFit, stripWidth,
 } from './layout-math.js';
-import { stepZoom } from './format.js';
+import { stepZoom, songTitle } from './format.js';
 import { DeckUI } from './deck-ui.js';
 import { MixerUI } from './mixer-ui.js';
 import { FxUI } from './fx-ui.js';
 import { SongsUI } from './songs-ui.js';
 import { AutomixUI } from './automix-ui.js';
+import { PlayerUI } from './player-ui.js';
+import { songActionText } from './player-text.js';
 import { Toasts, Dialog, StartOverlay, ResumeBanner, Coach } from './overlays.js';
 import { SheetHost } from './sheets/sheet.js';
 import { menuSheet } from './sheets/menu-sheet.js';
@@ -39,15 +43,20 @@ const TAB_DEFS = {
   mix: { label: 'MIX', icon: 'mix' },
   fx: { label: 'FX', icon: 'fx' },
   songs: { label: 'SONGS', icon: 'songs' },
+  player: { label: 'PLAYER', icon: 'player' },
 };
+
+/** Frames between refreshes of the PLAYER tab / header button light. */
+const INDICATOR_EVERY = 6;
 
 export class AppUI {
   /**
    * @param {{root:HTMLElement, engine:object, decks:object[], sync:object, settings:object, library:object,
-   *          playlist?:object, automix?:object}} deps  playlist / automix: src/deck/playlist.js + automix.js
-   *          (optional: without them the set list and Auto Mix controls stay hidden)
+   *          playlist?:object, automix?:object, player?:object}} deps  playlist / automix / player:
+   *          src/deck/playlist.js, automix.js, player.js (optional: without them the set list, Auto Mix and
+   *          player controls stay hidden; the player needs the other two)
    */
-  constructor({ root, engine, decks, sync, settings, library, playlist = null, automix = null }) {
+  constructor({ root, engine, decks, sync, settings, library, playlist = null, automix = null, player = null }) {
     this.root = root;
     this.engine = engine;
     this.decks = decks;
@@ -56,6 +65,7 @@ export class AppUI {
     this.library = library;
     this.playlist = playlist || null;
     this.automix = automix || null;
+    this.player = this.playlist && this.automix && player ? player : null;
     this.html = document.documentElement;
     this._amRow = false;
 
@@ -106,6 +116,8 @@ export class AppUI {
       this.mixer.render(shown, eng && eng.ready ? eng.mixer : null);
     };
     this._renderAm = () => this.amui.render();
+    this._renderPlayer = () => this.playerUI.render();
+    this._renderIndicator = () => this._playerIndicator();
     this._raf = requestAnimationFrame(this._frameFn);
   }
 
@@ -130,14 +142,18 @@ export class AppUI {
       icon('fx'), h('span.hb-text', { text: 'FX' }));
     this.hbSongs = h('button.hbtn.hb-songs', { type: 'button', 'aria-label': 'Songs', 'aria-pressed': 'false' },
       icon('songs'), h('span.hb-text', { text: 'SONGS' }));
+    this.hbPlayer = h('button.hbtn.hb-player',
+      { type: 'button', 'aria-label': 'Music player', 'aria-pressed': 'false', hidden: !this.player },
+      icon('player'), h('span.hb-text', { text: 'PLAYER' }), h('span.live-dot', { 'aria-hidden': 'true' }));
     this.hbMenu = h('button.hbtn.hb-menu', { type: 'button', 'aria-label': 'Menu: outputs, settings, help' }, icon('menu'));
     this.hbFx.addEventListener('click', () => this.setPage('fx'));
     this.hbSongs.addEventListener('click', () => this.setPage('songs'));
+    this.hbPlayer.addEventListener('click', () => this.setPage('player'));
     this.hbMenu.addEventListener('click', () => this.openMenu());
     const brand = h('span.brand', { 'aria-hidden': 'true' }, h('span.brand-disc'), h('span.brand-twin', { text: 'Twin' }),
       h('span.brand-spin', { text: 'Spin' }));
     this.header = h('header.hdr', {}, this.deckUIs[0].chip,
-      h('div.hdr-mid', {}, brand, this.outChip, this.hbFx, this.hbSongs, this.hbMenu), this.deckUIs[1].chip);
+      h('div.hdr-mid', {}, brand, this.outChip, this.hbFx, this.hbSongs, this.hbPlayer, this.hbMenu), this.deckUIs[1].chip);
 
     // Waveforms: A overview, zoomed lanes (one canvas, both decks), B overview
     this.ovCanvas = [h('canvas.ov.ov-a', { 'aria-label': 'Deck A whole-song overview. Tap to jump.' }),
@@ -152,12 +168,15 @@ export class AppUI {
       trackHold(h('div.wave-wrap', {}, this.waveCanvas, h('div.zoom', {}, zIn, zOut))),
       trackHold(h('div.ov-wrap.ov-wrap-b', {}, this.ovCanvas[1])));
 
-    // Bottom tab bar (phone/tablet portrait) with the AUTO MIX switch at its end
+    // Bottom tab bar (phone/tablet portrait): DECKS MIX FX SONGS PLAYER on phones (with no Player the AUTO MIX
+    // switch takes the last place), MIX FX SONGS PLAYER + the AUTO MIX switch on tablets: never more than five.
     this.amui = new AutomixUI(this);
+    this.playerUI = new PlayerUI(this);
     this.tabBtns = {};
     this.tabs = h('nav.tabs', { 'aria-label': 'Pages' }, Object.keys(TAB_DEFS).map((p) => {
       const d = TAB_DEFS[p];
-      const b = h(`button.tab.tab-${p}`, { type: 'button', dataset: { page: p } }, icon(d.icon, 'tab-ico'), h('span.tab-text', { text: d.label }));
+      const b = h(`button.tab.tab-${p}`, { type: 'button', dataset: { page: p } }, icon(d.icon, 'tab-ico'),
+        h('span.tab-text', { text: d.label }), p === 'player' ? h('span.live-dot', { 'aria-hidden': 'true' }) : null);
       b.addEventListener('click', () => this.setPage(p));
       this.tabBtns[p] = b;
       return b;
@@ -166,7 +185,7 @@ export class AppUI {
     this.amui.addTarget(this.songs.setList);
 
     this.shell = h('div.shell', {}, this.header, this.waves, this.deckUIs[0].el, this.deckUIs[1].el, this.mixer.el,
-      this.fxUIs[0].el, this.fxUIs[1].el, this.songs.el, this.amui.el, this.mixer.xfEl, this.tabs);
+      this.fxUIs[0].el, this.fxUIs[1].el, this.songs.el, this.playerUI.el, this.amui.el, this.mixer.xfEl, this.tabs);
     this.overlay = h('div.overlays');
     this.probe = h('div.inset-probe', { 'aria-hidden': 'true' });
     root.append(this.shell, this.overlay, this.probe);
@@ -223,6 +242,7 @@ export class AppUI {
       this.library.on('error', (msg) => this.toast(msg, { kind: 'error' }));
     }
     this.amui.bind();
+    this.playerUI.bind();
     const eng = this.engine;
     if (eng && typeof eng.on === 'function') {
       eng.on('ready', () => this._onEngineReady());
@@ -260,6 +280,10 @@ export class AppUI {
       }
       case 'outputMode': this._updateOutChip(); break;
       case 'mixBeats': this.songs.setList.renderOptions(); break;
+      case 'transitionStyle':
+      case 'crossfadeSec':
+      case 'playerShuffle':
+      case 'playerRepeat': this.playerUI.markDirty(); break;
       case 'setList':
       case 'automixReturn':
       case 'automixBassSwap': break;
@@ -350,9 +374,10 @@ export class AppUI {
     const layout = pickLayout(w, hgt);
     const prevLayout = this.layout;
     this._measuring = true;
-    if (layout !== prevLayout && layout === 'console' && this.settings.get('page') === 'songs') {
-      // The songs page of a phone layout (or of the last visit) must not come back as an open drawer over the
-      // desktop decks: the drawer opens only when asked for in this layout. (The 'page' setting event re-applies
+    const savedPage = this.settings.get('page');
+    if (layout !== prevLayout && layout === 'console' && (savedPage === 'songs' || savedPage === 'player')) {
+      // The songs / player page of a phone layout (or of the last visit) must not come back as an open drawer over
+      // the desktop decks: a drawer opens only when asked for in this layout. (The 'page' setting event re-applies
       // the page; the layout switch below applies it again for the new layout.)
       try {
         this.settings.set('page', 'mix');
@@ -361,10 +386,13 @@ export class AppUI {
       }
     }
     this._measuring = false;
-    const place = automixPlacement(layout, effectivePage(layout, this.settings.get('page')), this.amui.enabled && !!this.automix);
+    const place = automixPlacement(layout, this._pageFor(layout), this.amui.enabled && !!this.automix, { player: !!this.player });
     this._amRow = place.row;
     const s = computeSizes(layout, w, hgt, this._insets(), { am: place.row });
     this.sizes = s;
+    const pb = playerBox(s);
+    this.playerUI.setLayout(playerLayout(pb.w, pb.h));
+    this.amui.setFit(stripFit(stripWidth(s), { toggle: place.where === 'xf' }));
     this.viewport = { w, h: hgt };
     const vars = cssVars(s);
     vars['--app-h'] = `${hgt}px`;
@@ -387,10 +415,16 @@ export class AppUI {
     this.coach.place();
   }
 
+  /** The page settings.page means in a layout (the player page only exists with a Player). */
+  _pageFor(layout) {
+    const page = effectivePage(layout, this.settings.get('page'));
+    return page === 'player' && !this.player ? effectivePage(layout, 'decks') : page;
+  }
+
   /** Apply settings.page / fxDeck to the DOM for the current layout. */
   _applyPage() {
     const layout = this.layout || 'pp';
-    const page = effectivePage(layout, this.settings.get('page'));
+    const page = this._pageFor(layout);
     this.page = page;
     this.root.dataset.page = page;
     const fxDeck = this.settings.get('fxDeck') === 'B' ? 'B' : 'A';
@@ -404,19 +438,23 @@ export class AppUI {
     this.fxUIs[0].el.hidden = !vis.fxA;
     this.fxUIs[1].el.hidden = !vis.fxB;
     this.songs.el.hidden = !vis.songs;
+    this.playerUI.el.hidden = !vis.player || !this.player;
     this.waves.hidden = !vis.waves;
     this.tabs.hidden = !vis.tabs;
     this.mixer.xfEl.hidden = !vis.xf;
     const tabs = tabsFor(layout);
     for (const p of Object.keys(this.tabBtns)) {
       const b = this.tabBtns[p];
-      b.hidden = !tabs.includes(p);
+      b.hidden = !tabs.includes(p) || (p === 'player' && !this.player);
       setAttr(b, 'aria-current', p === page ? 'page' : null);
       setClass(b, 'on', p === page);
     }
     setAttr(this.hbFx, 'aria-pressed', page === 'fx' ? 'true' : 'false');
     setAttr(this.hbSongs, 'aria-pressed', page === 'songs' ? 'true' : 'false');
+    setAttr(this.hbPlayer, 'aria-pressed', page === 'player' ? 'true' : 'false');
+    this.hbPlayer.hidden = !this.player;
     if (page === 'songs') this.songs.render();
+    if (page === 'player') this.playerUI.markListDirty();
     this._applyAutomix();
     this.mixer.markDirty();
     this.fxUIs.forEach((f) => f.markDirty());
@@ -426,7 +464,7 @@ export class AppUI {
   /** Place and show the Auto Mix strip for the layout / page; re-measure when its row appears or goes. */
   _applyAutomix() {
     const layout = this.layout || 'pp';
-    const place = automixPlacement(layout, this.page, this.amui.enabled);
+    const place = automixPlacement(layout, this.page, this.amui.enabled, { player: !!this.player });
     this.amui.place(place.where, { shell: this.shell, waves: this.waves, xf: this.mixer.xfEl });
     this.amui.setShown(place.show && !!this.automix);
     this.amui.tabBtn.hidden = !this.automix || !place.tabToggle;
@@ -437,11 +475,12 @@ export class AppUI {
   /** AutoMix 'change' / 'takeover' / 'finished': badges, strip placement, markers. */
   onAutomixChange() {
     this.amui.markDirty();
+    this.playerUI.markDirty();
     this.songs.setList.updateBadges();
     this._applyAutomix();
   }
 
-  /** Show a page (phones/tablets) or toggle FX/SONGS (phone landscape, desktop). */
+  /** Show a page (phones/tablets) or toggle FX / SONGS / PLAYER (phone landscape, desktop). */
   setPage(p) {
     let next = p;
     if ((this.layout === 'pl' || this.layout === 'console') && next === this.page && next !== 'mix') next = 'mix';
@@ -467,6 +506,82 @@ export class AppUI {
   /** Open the songs page/sheet/drawer. */
   showSongs() {
     if (effectivePage(this.layout, 'songs') !== this.page) this.setPage('songs');
+  }
+
+  /** Open the player page/drawer (when there is a Player). */
+  showPlayer() {
+    if (!this.player) return;
+    if (effectivePage(this.layout, 'player') !== this.page) this.setPage('player');
+  }
+
+  // ---- music player (the work is in player-ui.js; the Player itself is src/deck/player.js) -----------------------
+
+  /** Play / pause the queue (big play button, the strip, Space on the player page). */
+  playerToggle() {
+    this.playerUI.togglePlay();
+  }
+
+  /** Next song (the strip, key N). */
+  playerNext() {
+    this.playerUI.next();
+  }
+
+  /** Previous song, or the start of this one (the strip, key B). */
+  playerPrevious() {
+    this.playerUI.previous();
+  }
+
+  /** Keys N / B act while the player page is open or the queue is playing. */
+  playerKeysActive() {
+    if (!this.player) return false;
+    if (this.page === 'player') return true;
+    try {
+      const st = this.player.state;
+      return !!st && st !== 'stopped';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * A Songs page ⋯ action for a library entry or { kind: 'demo', id, ... }: 'now' (Play now), 'next' (Play next)
+   * or 'queue' (Add to queue). Toasts what happened.
+   */
+  songAction(kind, entry) {
+    const p = this.player;
+    if (!p || !entry) return;
+    const title = songTitle(entry);
+    const method = kind === 'now' ? 'playNow' : kind === 'next' ? 'playNext' : 'addToQueue';
+    if (typeof p[method] !== 'function') return;
+    if (kind === 'now' && !(this.engine && this.engine.ready)) {
+      this.toast('Tap Start first so TwinSpin can play sound.', { kind: 'error' });
+      return;
+    }
+    let res;
+    try {
+      res = p[method](entry);
+    } catch (err) {
+      console.warn('[TwinSpin] player action failed', err);
+      this.toast("That song couldn't be queued. Try again.", { kind: 'error' });
+      return;
+    }
+    if (Array.isArray(res) && !res.length) {
+      this.toast('The queue is full. Remove some songs first.', { kind: 'error' });
+      return;
+    }
+    const opts = { kind: 'ok' };
+    if (this.page !== 'player') opts.action = { label: 'Player', onClick: () => this.showPlayer() };
+    this.toast(songActionText(kind, title), opts);
+    this.playerUI.markListDirty();
+  }
+
+  /** The PLAYER tab / header button light up while the queue plays (every few frames). */
+  _playerIndicator() {
+    const st = this.playerUI.indicator();
+    for (const el of [this.tabBtns.player, this.hbPlayer]) {
+      setClass(el, 'live', st === 'live');
+      setClass(el, 'paused', st === 'paused');
+    }
   }
 
   openMenu() {
@@ -871,8 +986,8 @@ export class AppUI {
 
   /**
    * The one requestAnimationFrame loop (contract 6.3): decks (platter, tempo field, header chip), waveforms and
-   * overviews, mixer meters and widget sync, FX pads, coach bubble. Hidden parts are skipped; each part is
-   * guarded so one failing widget cannot stop the others.
+   * overviews, mixer meters and widget sync, FX pads, Auto Mix strip, the player page, coach bubble. Hidden parts
+   * are skipped; each part is guarded so one failing widget cannot stop the others.
    */
   _frame() {
     this._raf = requestAnimationFrame(this._frameFn);
@@ -890,6 +1005,10 @@ export class AppUI {
     if (!vis || vis.fxA) guard('fx ui A', this._renderFx[0]);
     if (!vis || vis.fxB) guard('fx ui B', this._renderFx[1]);
     guard('automix ui', this._renderAm);
+    if (this.player) {
+      if (vis && vis.player) guard('player ui', this._renderPlayer);
+      if (this._frameCount % INDICATOR_EVERY === 0) guard('player indicator', this._renderIndicator);
+    }
     if (this._frameCount % 12 === 0) this.coachFlow.tick();
   }
 
@@ -904,6 +1023,7 @@ export class AppUI {
     this.mixer.destroy();
     this.fxUIs.forEach((f) => f.destroy());
     this.amui.destroy();
+    this.playerUI.destroy();
     this.songs.destroy();
     for (const w of [this.wave, ...this.overviews]) {
       if (w && typeof w.destroy === 'function') guard('destroy', () => w.destroy());

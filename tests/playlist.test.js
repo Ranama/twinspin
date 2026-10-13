@@ -2,6 +2,7 @@
 // song pointer, persistence in settings.setList and keeping up with the library.
 import { Emitter } from '../src/core/emitter.js';
 import { Playlist, itemRef, titleFromFileName, MAX_SET_LIST } from '../src/deck/playlist.js';
+import { mulberry32 } from '../src/core/util.js';
 
 class FakeSettings extends Emitter {
   constructor(values = {}) {
@@ -228,4 +229,217 @@ test('an outside settings change (reset) reloads the list; the cap holds', () =>
   bare.add({ id: 'x1', title: 'Hint title' });
   assert.equal(bare.length, 2);
   assert.equal(bare.items[1].title, 'Hint title');
+});
+
+// ---- music player queue (docs/PLAYER.md section 2) ------------------------------------------------------------
+
+/** A library of n songs q0..q(n-1). */
+const many = (n) => Array.from({ length: n }, (_, i) => ({ id: `q${i}`, title: `Song ${i}`, fileName: `q${i}.mp3` }));
+
+/** A playlist of library songs q0..q(n-1), a seeded shuffle and a settings stub. */
+function queue(n = 8, { seed = 7, shuffle = false } = {}) {
+  const settings = new FakeSettings({ setList: [], playerShuffle: shuffle });
+  const library = new FakeLibrary(many(n + 20));
+  const pl = new Playlist({ settings, library, random: mulberry32(seed) });
+  pl.add(Array.from({ length: n }, (_, i) => ({ id: `q${i}` })));
+  return { settings, library, pl };
+}
+
+test('addNext: right after the current song, at the top when none is current, several in order', () => {
+  const { pl, settings } = setup();
+  pl.add([{ id: 's1' }, { id: 's2' }, { id: 's3' }]);
+  const [a, b, c] = pl.items;
+  const [x] = pl.addNext({ kind: 'demo', id: 0 });
+  assert.equal(pl.items[0], x, 'nothing current: it is next = the top');
+  assert.equal(pl.peekNext(), x);
+  pl.setCurrent(b.uid);
+  const [y, z] = pl.addNext([{ kind: 'demo', id: 1 }, { id: 's1' }]);
+  assert.deepEqual(uids(pl), [x.uid, a.uid, b.uid, y.uid, z.uid, c.uid]);
+  assert.equal(pl.peekNext(), y);
+  assert.equal(pl.current, b, 'the current song stays current');
+  assert.deepEqual(settings.get('setList').map((r) => r.id), [0, 's1', 's2', 1, 's1', 's3']);
+  assert.deepEqual(pl.addNext([{ nonsense: 1 }]), []);
+});
+
+test('setShuffle: only the upcoming songs, seeded, saved; off restores their order', () => {
+  const { pl, settings } = queue(8);
+  pl.setCurrent(2);
+  const before = uids(pl);
+  assert.equal(pl.shuffle, false);
+  assert.equal(pl.setShuffle(true), true);
+  assert.equal(pl.shuffle, true);
+  assert.equal(settings.get('playerShuffle'), true);
+  const after = uids(pl);
+  assert.deepEqual(after.slice(0, 3), before.slice(0, 3), 'played songs and the current one stay put');
+  assert.deepEqual([...after.slice(3)].sort(), [...before.slice(3)].sort(), 'a permutation of the upcoming songs');
+  assert.notDeepEqual(after.slice(3), before.slice(3), 'in another order');
+  assert.equal(pl.currentIndex, 2);
+  assert.deepEqual(settings.get('setList').map((r) => r.id), pl.items.map((x) => x.id), 'the new order is saved');
+  // the same seed gives the same order (deterministic tests)
+  const again = queue(8);
+  again.pl.setCurrent(2);
+  again.pl.setShuffle(true);
+  assert.deepEqual(again.pl.items.map((x) => x.id), pl.items.map((x) => x.id));
+  assert.equal(pl.setShuffle(true), false, 'already on');
+  // off: the upcoming songs go back to their old order
+  assert.equal(pl.setShuffle(false), true);
+  assert.deepEqual(uids(pl), before);
+  assert.equal(settings.get('playerShuffle'), false);
+  // nothing current: the whole list is upcoming
+  const all = queue(8, { seed: 5 });
+  const order = uids(all.pl);
+  all.pl.setShuffle(true);
+  assert.notDeepEqual(uids(all.pl), order);
+  all.pl.setShuffle(false);
+  assert.deepEqual(uids(all.pl), order);
+});
+
+test('shuffle: songs played meanwhile stay where they are; songs added meanwhile follow at the end', () => {
+  const { pl } = queue(8, { seed: 11 });
+  pl.setCurrent(0);
+  const before = uids(pl);
+  pl.setShuffle(true);
+  // two songs are played in the shuffled order
+  pl.advance();
+  pl.advance();
+  const played = uids(pl).slice(0, 3);
+  // add (random upcoming position) and addNext (right next) while shuffled
+  const [r] = pl.add({ id: 'q20' });
+  assert(pl.indexOf(r.uid) > pl.currentIndex, 'a random UPCOMING position');
+  const [nx] = pl.addNext({ id: 'q21' });
+  assert.equal(pl.indexOf(nx.uid), pl.currentIndex + 1, 'play next stays right next while shuffled');
+  const addedOrder = uids(pl).filter((u) => u === r.uid || u === nx.uid);
+  pl.setShuffle(false);
+  const now = uids(pl);
+  assert.equal(now.length, 10);
+  assert.deepEqual(now.slice(0, 3), played, 'history untouched');
+  const upcomingOld = before.filter((u) => !played.includes(u));
+  assert.deepEqual(now.slice(3, 3 + upcomingOld.length), upcomingOld, 'the remaining songs in their old order');
+  assert.deepEqual(now.slice(3 + upcomingOld.length), addedOrder, 'the added ones after them (in their order)');
+});
+
+test('shuffle: add() spreads new songs over the upcoming positions', () => {
+  const { pl } = queue(6, { seed: 3 });
+  pl.setCurrent(1);
+  pl.setShuffle(true);
+  const atEnd = [];
+  const spots = new Set();
+  for (let i = 0; i < 12; i++) {
+    const [it] = pl.add({ id: `q${6 + i}` });
+    const at = pl.indexOf(it.uid);
+    assert(at >= 2 && at < pl.length, `upcoming (${at})`);
+    atEnd.push(at === pl.length - 1);
+    spots.add(at);
+  }
+  assert(atEnd.includes(false), 'not simply appended');
+  assert(spots.size >= 6, `spread over the upcoming positions (${[...spots]})`);
+  assert.equal(pl.currentIndex, 1);
+  // an explicit index still wins
+  const [top] = pl.add({ kind: 'demo', id: 0 }, { at: 0 });
+  assert.equal(pl.items[0], top);
+});
+
+test('previous, rewind and peekNext with repeat', () => {
+  const { pl } = queue(4);
+  const [a, b, c, d] = pl.items;
+  assert.equal(pl.previous(), null, 'nothing current');
+  assert.equal(pl.peekNext({ repeat: 'one' }), a, 'repeat one, nothing current: the first song');
+  pl.setCurrent(c.uid);
+  assert.equal(pl.previous(), b);
+  assert.equal(pl.current, b);
+  assert.equal(pl.previous(), a);
+  assert.equal(pl.previous(), null, 'at the top');
+  assert.equal(pl.current, a);
+  pl.setCurrent(d.uid);
+  assert.equal(pl.peekNext(), null);
+  assert.equal(pl.peekNext({ repeat: 'off' }), null);
+  assert.equal(pl.peekNext({ repeat: 'all' }), a, 'repeat all: the top again after the last song');
+  assert.equal(pl.peekNext({ repeat: 'one' }), d, 'repeat one: the same song');
+  pl.setCurrent(b.uid);
+  assert.equal(pl.peekNext({ repeat: 'all' }), c);
+  let changes = 0;
+  pl.on('change', () => changes++);
+  assert.equal(pl.rewind(), a);
+  assert.equal(pl.currentIndex, 0);
+  assert(!pl.isPlayed(a.uid) && !pl.isPlayed(c.uid), 'everything unplayed again');
+  assert.equal(changes, 1);
+  pl.rewind();
+  assert.equal(changes, 1, 'no change the second time');
+  const empty = new Playlist();
+  assert.equal(empty.rewind(), null);
+  assert.equal(empty.peekNext({ repeat: 'all' }), null);
+});
+
+test('shuffle from settings: restored on start (order kept), outside changes applied, reset turns it off', () => {
+  const { pl, settings } = queue(6, { shuffle: true });
+  assert.equal(pl.shuffle, true, 'restored from settings.playerShuffle');
+  const order = uids(pl);
+  pl.setShuffle(false);
+  assert.deepEqual(uids(pl), order, 'nothing remembered from before the reload: the order stays');
+  settings.set('playerShuffle', true); // the Settings sheet
+  assert.equal(pl.shuffle, true);
+  assert.notDeepEqual(uids(pl), order);
+  settings.set('playerShuffle', false); // e.g. Reset all settings
+  assert.equal(pl.shuffle, false);
+  assert.deepEqual(uids(pl), order, 'the order from before shuffling');
+});
+
+test('removeMany / clearUpcoming: one save and one change; the current song handled like remove()', () => {
+  const { pl, settings } = queue(6);
+  const [a, b, c, d, e, f] = pl.items;
+  pl.setCurrent(c.uid);
+  let changes = 0;
+  pl.on('change', () => changes++);
+  const writes = settings.writes;
+  assert.equal(pl.removeMany([b.uid, 'nope', e.uid]), 2);
+  assert.deepEqual(uids(pl), [a.uid, c.uid, d.uid, f.uid]);
+  assert.equal(changes, 1);
+  assert.equal(settings.writes, writes + 1, 'saved once');
+  assert.equal(pl.current, c);
+  // the current song and the one before it go: the nearest song before them that stays is current
+  assert.equal(pl.removeMany([c.uid, a.uid]), 2);
+  assert.equal(pl.currentIndex, -1, 'nothing before them: none current, the next song is next');
+  assert.equal(pl.peekNext(), d);
+  assert.equal(pl.removeMany([]), 0);
+  assert.equal(pl.removeMany(null), 0);
+  assert.equal(changes, 2);
+  // clear the queue after the current song
+  pl.setCurrent(d.uid);
+  pl.add([{ id: 'q10' }, { id: 'q11' }]);
+  assert.equal(pl.clearUpcoming(), 3);
+  assert.deepEqual(uids(pl), [d.uid]);
+  assert.equal(pl.current, d);
+  assert.equal(pl.clearUpcoming(), 0);
+  pl.setCurrent(-1);
+  assert.equal(pl.clearUpcoming(), 1, 'none current: everything is upcoming');
+  assert.equal(pl.length, 0);
+});
+
+test('reshuffle: shuffle on, a new order for the upcoming songs (repeat all, a new round); shuffle off still restores', () => {
+  const { pl, settings } = queue(8, { seed: 3 });
+  const original = uids(pl);
+  assert.equal(pl.reshuffle(), false, 'shuffle is off: nothing happens');
+  assert.deepEqual(uids(pl), original);
+  pl.setShuffle(true);
+  pl.setCurrent(0);
+  const round1 = uids(pl);
+  let changes = 0;
+  const off = pl.on('change', () => changes++);
+  assert.equal(pl.reshuffle(), true);
+  off();
+  assert.equal(changes, 1, 'one change');
+  const round2 = uids(pl);
+  assert.equal(round2[0], round1[0], 'the current song stays first');
+  assert.equal(pl.currentIndex, 0);
+  assert.deepEqual(round2.slice(1).sort(), round1.slice(1).sort());
+  assert.notDeepEqual(round2.slice(1), round1.slice(1), 'another order');
+  assert.deepEqual(settings.get('setList').map((r) => r.id), pl.items.map((x) => x.id), 'saved');
+  // shuffle off: the order from before shuffling
+  pl.setShuffle(false);
+  const head = uids(pl)[0];
+  assert.deepEqual(uids(pl).slice(1), original.filter((u) => u !== head));
+  // fewer than two upcoming songs: nothing to do
+  const small = queue(2, { seed: 3, shuffle: true });
+  small.pl.setCurrent(0);
+  assert.equal(small.pl.reshuffle(), false);
 });

@@ -1,5 +1,5 @@
-// Menu sheet (the header menu button): Outputs (with the current routing), Settings, Help, Full screen and
-// Install where available, the iPhone "Add to Home Screen" hint, and the version line.
+// Menu sheet (the header menu button): Outputs (with the current routing), Songs, the music player, Settings,
+// Help, Full screen and Install where available, the iPhone "Add to Home Screen" hint, and the version line.
 //   host.open(menuSheet(app));
 
 import { h, icon } from '../dom.js';
@@ -21,7 +21,15 @@ export function menuSheet(app) {
       });
       const set = navRow('gear', 'Settings', 'Tempo range, scratch, crossfader, screen', () => host.push(settingsSheet(app)));
       const help = navRow('help', 'Help', 'How everything works, in plain words', () => host.push(helpSheet(app)));
-      const rows = [out.el, songs.el, set.el, help.el];
+      const rows = [out.el, songs.el];
+      if (app.player) {
+        const player = navRow('player', 'Music player', 'The queue: play, shuffle, repeat, transitions', () => {
+          host.close();
+          app.showPlayer();
+        });
+        rows.push(player.el);
+      }
+      rows.push(set.el, help.el);
       if (canFullscreen()) {
         const fs = navRow('fullscreen', isFullscreen() ? 'Leave full screen' : 'Full screen', 'Hide the browser bars', () => {
           toggleFullscreen();

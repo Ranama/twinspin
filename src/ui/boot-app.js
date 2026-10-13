@@ -1,10 +1,11 @@
-// DJ app wiring: Settings, AudioEngine, Library, Deck A/B, SyncController, Playlist (the set list), AutoMix and
-// AppUI (contract section 1, docs/AUTOMIX.md section 5).
+// DJ app wiring: Settings, AudioEngine, Library, Deck A/B, SyncController, Playlist (the set list = the queue),
+// AutoMix, Player (the music player facade) and AppUI (contract section 1, docs/AUTOMIX.md section 5,
+// docs/PLAYER.md sections 4-5).
 // src/main.js loads this module with ONE dynamic import (so the second-device receiver page never downloads the
 // DJ engine, and a module that fails to load shows a readable message instead of a blank page). Every import
 // in the DJ module graph from here on is static. No side effects at import time.
 //   const app = startApp(document.getElementById('app'));
-//   // { settings, engine, library, decks, sync, playlist, automix, ui }
+//   // { settings, engine, library, decks, sync, playlist, automix, player, ui }
 // Screenshot mode (?shot=<name>, for the README pictures) is at the end of this file; without ?shot it never runs.
 
 import { env } from '../core/env.js';
@@ -15,6 +16,7 @@ import { Deck } from '../deck/deck.js';
 import { SyncController } from '../deck/sync.js';
 import { Playlist } from '../deck/playlist.js';
 import { AutoMix } from '../deck/automix.js';
+import { Player } from '../deck/player.js';
 import { AppUI } from './app-ui.js';
 import { waitFor } from './track-loader.js';
 
@@ -24,7 +26,7 @@ import { waitFor } from './track-loader.js';
  * Auto Mix always starts switched off (a reload never starts music by itself); the set list is restored.
  * @param {HTMLElement} root
  * @returns {{settings:Settings, engine:AudioEngine, library:Library, decks:Deck[], sync:SyncController,
- *   playlist:Playlist|null, automix:AutoMix|null, ui:AppUI}}
+ *   playlist:Playlist|null, automix:AutoMix|null, player:Player|null, ui:AppUI}}
  */
 export function startApp(root) {
   const shot = shotName();
@@ -33,9 +35,11 @@ export function startApp(root) {
   const library = new Library();
   const decks = [new Deck('A', engine, settings), new Deck('B', engine, settings)];
   const sync = new SyncController(decks, settings);
-  // The set list and Auto Mix are extras: if either fails to build, the two decks still work.
+  // The set list, Auto Mix and the player are extras: if one fails to build, the two decks still work (and the
+  // UI hides what is missing).
   let playlist = null;
   let automix = null;
+  let player = null;
   try {
     playlist = new Playlist({ settings, library });
   } catch (err) {
@@ -48,9 +52,16 @@ export function startApp(root) {
       console.error('[TwinSpin] Auto Mix unavailable', err);
     }
   }
+  if (playlist && automix) {
+    try {
+      player = new Player({ automix, playlist, decks, engine, settings, library });
+    } catch (err) {
+      console.error('[TwinSpin] music player unavailable', err);
+    }
+  }
   root.classList.remove('booting');
-  const ui = new AppUI({ root, engine, decks, sync, settings, library, playlist, automix });
-  const app = { settings, engine, library, decks, sync, playlist, automix, ui, env };
+  const ui = new AppUI({ root, engine, decks, sync, settings, library, playlist, automix, player });
+  const app = { settings, engine, library, decks, sync, playlist, automix, player, ui, env };
   try {
     window.twinspin = app; // handy in the browser console and for remote debugging
   } catch {
@@ -78,16 +89,17 @@ export function startApp(root) {
 // ---- Screenshot mode ---------------------------------------------------------------------------------------------
 // Opt-in scenes for capturing the README screenshots with a headless browser that allows autoplay (for example
 // Edge or Chrome started with --headless=new --autoplay-policy=no-user-gesture-required --mute-audio), opened at
-//   http://localhost:8100/?nosw&shot=decks        (decks | mix | fx | songs | desktop | start)
+//   http://localhost:8100/?nosw&shot=decks        (decks | mix | fx | songs | player | desktop | start)
 // A scene uses its own settings key (the visitor's own settings and set list are never touched), shows no tips
 // and no install offer, starts audio without a tap (if the browser keeps the context suspended the engine still
 // comes up and the UI renders), and then:
 //   decks, mix, fx, desktop: both demo tracks play, deck B synced to deck A; fx also switches ECHO on for deck A;
 //   songs: the demos go into the set list, Auto Mix plays them and starts the first mix at once (MIX NOW);
+//   player: the PLAYER page; the demos go into the queue and the player plays them;
 //   start: nothing, the "Tap to start" screen is the picture.
 // Without a valid ?shot value none of this runs.
 
-const SHOTS = ['decks', 'mix', 'fx', 'songs', 'desktop', 'start'];
+const SHOTS = ['decks', 'mix', 'fx', 'songs', 'player', 'desktop', 'start'];
 
 /** The ?shot=<name> scene, or null (the normal app). */
 function shotName() {
@@ -114,7 +126,7 @@ function shotSettings(shot) {
 
 /** Start audio, load and play the demos for the scene. Every step is best effort: a failure leaves the UI as is. */
 function runShot(app, shot) {
-  const { ui, engine, decks, sync, playlist, automix } = app;
+  const { ui, engine, decks, sync, playlist, automix, player } = app;
   ui._offerInstall = () => {}; // no "Install TwinSpin" toast over the picture
   if (shot === 'start') return;
   const has = (d) => !!(d && d.track && d.bpm > 0 && !d.loading && !d.analyzing);
@@ -122,6 +134,11 @@ function runShot(app, shot) {
   ui.start(false); // engine.start() without a tap
   waitFor(() => engine.ready, WAIT).then((ready) => {
     if (!ready) return;
+    if (shot === 'player' && playlist && player) {
+      ui.addToSetList([{ kind: 'demo', id: 0 }, { kind: 'demo', id: 1 }], { quiet: true });
+      player.play();
+      return;
+    }
     if (shot === 'songs' && playlist && automix) {
       // Auto Mix starts the list from idle (demo 1 on deck A, demo 2 prepared on deck B), then mixes right away.
       ui.addToSetList([{ kind: 'demo', id: 0 }, { kind: 'demo', id: 1 }], { quiet: true });

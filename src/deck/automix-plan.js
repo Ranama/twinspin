@@ -10,8 +10,20 @@
 // guess). Track info objects: { bpm, firstBeat, beats?, duration, waveform?, rate?, bounds? } where `rate` is the
 // current deck's playback rate (1 for the next song) and `bounds` overrides musicalBounds().
 //
+// Transition styles (settings.transitionStyle, docs/PLAYER.md section 3):
+//   'dj'        the beat-matched DJ mix below (mode 'match' | 'meet' | 'cut').
+//   'crossfade' (mode 'crossfade') no tempo change, no sync, no bass swap: the next song starts at its first beat
+//               crossfadeSec before the current song's musical end; an equal-power crossfade of crossfadeSec ends
+//               exactly there. Both songs keep their own tempo (rate 1 unless the user set one).
+//   'gapless'   (mode 'gapless') the next song starts at its musical start exactly when the current song reaches
+//               its musical end; a 15 ms crossfade on the audio clock (GAPLESS_FADE).
+//   quickTransition(): the player's skip / back / jump ("quick", mode 'cut'): a 1.5 s equal-power fade from now.
+//
 // Transition = {
-//   mode: 'match' | 'meet' | 'cut',   multiplier: 0.5 | 1 | 2 (next-song beats per current-song beat),
+//   style: 'dj' | 'crossfade' | 'gapless' | 'quick',
+//   mode: 'match' | 'meet' | 'cut' | 'crossfade' | 'gapless',
+//                                     // (beat matching and sync only for 'match' / 'meet': isBeatMatched())
+//   multiplier: 0.5 | 1 | 2 (next-song beats per current-song beat),
 //   beats,                            // mix length in current-song beats (0 = a timed blend, no beat grid)
 //   fadeSec,                          // mix length in seconds at the planned tempo (display; the scheduler
 //                                     // recomputes it from the live tempo)
@@ -23,7 +35,7 @@
 //   late: boolean,                    // planned from opts.earliest (mix as soon as possible)
 //   curBounds, nextBounds,            // musicalBounds() of both songs
 // }
-// Contract: docs/AUTOMIX.md section 4.4.
+// Contract: docs/AUTOMIX.md section 4.4, docs/PLAYER.md section 3.
 
 import { clamp } from '../core/util.js';
 import { matchTempo, beatsAt, timeOfBeat } from './sync-math.js';
@@ -46,6 +58,16 @@ export const CUT_SECONDS = 6;
 export const NO_BPM_OUT_SECONDS = 8;
 /** A song plays at least this many beats after its in-point before it is mixed out. */
 export const MIN_PLAY_BEATS = 16;
+/** Transition styles (settings.transitionStyle). */
+export const TRANSITION_STYLES = Object.freeze(['dj', 'crossfade', 'gapless']);
+/** 'crossfade' style: overlap in seconds (settings.crossfadeSec). */
+export const CROSSFADE_MIN = 2;
+export const CROSSFADE_MAX = 12;
+export const CROSSFADE_DEFAULT = 6;
+/** 'gapless' style: the two songs meet with fades this short (s). */
+export const GAPLESS_FADE = 0.015;
+/** Player skip / back / jump: a plain equal-power fade this long (s), no beat matching. */
+export const QUICK_FADE = 1.5;
 
 const EPS = 1e-6;
 
@@ -278,16 +300,119 @@ function readSetting(settings, key, fallback) {
   }
 }
 
+/** settings.transitionStyle, validated ('dj' for anything unknown). */
+export function transitionStyleOf(settings) {
+  const s = readSetting(settings, 'transitionStyle', 'dj');
+  return TRANSITION_STYLES.includes(s) ? s : 'dj';
+}
+
+/** settings.crossfadeSec, clamped to 2..12 s (6 when missing or broken). */
+export function crossfadeSecondsOf(settings) {
+  const v = Number(readSetting(settings, 'crossfadeSec', CROSSFADE_DEFAULT));
+  return Number.isFinite(v) ? clamp(v, CROSSFADE_MIN, CROSSFADE_MAX) : CROSSFADE_DEFAULT;
+}
+
+/** Does this plan beat-match the songs (tempo matched, bars aligned, sync during the mix)? */
+export function isBeatMatched(plan) {
+  return !!plan && (plan.mode === 'match' || plan.mode === 'meet');
+}
+
+/** The tempo part of a plan that leaves both tempos alone. */
+function plainTempo(mode, curRate) {
+  return { mode, multiplier: 1, nextStartRate: 1, curTargetRate: curRate, meetBpm: null, preRampBeats: 0, returnSeconds: 0 };
+}
+
 /**
- * Plan the transition from the current song to the next one (pure, from track data).
+ * 'crossfade' and 'gapless' plans: timed from the musical end of the current song, not from its beats.
+ *   crossfade: out = end - crossfadeSec (track time at the current rate; at most half the song's music), the
+ *     fade lasts until the end; in = the next song's first beat (chooseInPoint).
+ *   gapless: out = end, a 15 ms fade; in = the next song's musical start.
+ *   late (opts.earliest): from `earliest`, the fade at most crossfadeSec (crossfade) or QUICK_FADE (gapless)
+ *     and never past the end of the music (15 ms when the music is already over).
+ */
+function planSmooth(style, cur, next, settings, opts) {
+  const curRate = cur && cur.rate > 0 ? cur.rate : 1;
+  const curBounds = (cur && cur.bounds) || musicalBounds(cur && cur.waveform, cur ? cur.duration : 0);
+  const nextBounds = (next && next.bounds) || musicalBounds(next && next.waveform, next ? next.duration : 0);
+  const late = Number.isFinite(opts.earliest);
+  const end = curBounds.end;
+  const longest = style === 'gapless' ? QUICK_FADE : crossfadeSecondsOf(settings);
+  let outAt;
+  let fadeSec;
+  if (late) {
+    outAt = Math.max(0, opts.earliest);
+    fadeSec = clamp((end - outAt) / curRate, GAPLESS_FADE, longest);
+  } else if (style === 'gapless') {
+    outAt = end;
+    fadeSec = GAPLESS_FADE;
+  } else {
+    const half = curBounds.start + (end - curBounds.start) / 2;
+    outAt = Math.max(0, half, end - longest * curRate);
+    fadeSec = Math.max(GAPLESS_FADE, (end - outAt) / curRate);
+  }
+  const inAt = style === 'gapless' ? Math.max(0, nextBounds.start) : chooseInPoint(next, nextBounds);
+  const inBeat = hasGrid(next) ? Math.round(B(next, inAt)) : null;
+  return {
+    style,
+    mode: style,
+    multiplier: 1,
+    beats: 0,
+    fadeSec,
+    out: { at: outAt, beat: null, beats: 0 },
+    in: { at: inAt, beat: inBeat },
+    tempo: plainTempo(style, curRate),
+    bassSwap: false,
+    bassSwapBeat: 0,
+    echoOut: false,
+    late,
+    curBounds,
+    nextBounds,
+  };
+}
+
+/**
+ * The player's skip / back / jump transition (pure): the current song (at track time `outAt` when the fade
+ * starts) fades out over `fadeSec` (QUICK_FADE) while the next one starts at `inAt` at its own tempo. No beat
+ * matching, no bass swap, no echo. style 'quick', mode 'cut' (a quick blend).
+ * @param {{ outAt: number, inAt: number, curRate?: number, fadeSec?: number }} p
+ */
+export function quickTransition({ outAt, inAt, curRate = 1, fadeSec = QUICK_FADE }) {
+  const rate = curRate > 0 ? curRate : 1;
+  const out = Number.isFinite(outAt) ? Math.max(0, outAt) : 0;
+  const fade = fadeSec > 0 ? fadeSec : QUICK_FADE;
+  return {
+    style: 'quick',
+    mode: 'cut',
+    multiplier: 1,
+    beats: 0,
+    fadeSec: fade,
+    out: { at: out, beat: null, beats: 0 },
+    in: { at: Number.isFinite(inAt) ? Math.max(0, inAt) : 0, beat: null },
+    tempo: plainTempo('cut', rate),
+    bassSwap: false,
+    bassSwapBeat: 0,
+    echoOut: false,
+    late: true,
+    quick: true,
+    curBounds: null,
+    nextBounds: null,
+  };
+}
+
+/**
+ * Plan the transition from the current song to the next one (pure, from track data), in the style of
+ * settings.transitionStyle ('dj' when missing).
  * @param {object} cur  { bpm, firstBeat, beats?, duration, waveform?, rate, bounds? } of the playing song
  * @param {object} next { bpm, firstBeat, beats?, duration, waveform?, bounds? } of the next song
- * @param {object} settings a Settings object or plain { mixBeats, automixReturn, automixBassSwap }
+ * @param {object} settings a Settings object or plain { mixBeats, automixReturn, automixBassSwap,
+ *   transitionStyle, crossfadeSec }
  * @param {{ earliest?: number, noPreRamp?: boolean }} [opts] earliest: the mix may not start before this
  *   track time of the current song (MIX NOW / late: start at the first bar from there, no pre-ramp)
  * @returns {object} Transition (see the header)
  */
 export function planTransition(cur, next, settings, opts = {}) {
+  const style = transitionStyleOf(settings);
+  if (style !== 'dj') return planSmooth(style, cur, next, settings, opts || {});
   const mb = Number(readSetting(settings, 'mixBeats', 32));
   const mixBeats = MIX_LENGTHS.includes(mb) ? mb : 32;
   const easeBack = readSetting(settings, 'automixReturn', true) !== false;
@@ -326,6 +451,7 @@ export function planTransition(cur, next, settings, opts = {}) {
     fadeSec = (T(cur, out.beat + beats) - out.at) / (tempo.curTargetRate > 0 ? tempo.curTargetRate : curRate);
   }
   return {
+    style: 'dj',
     mode: tempo.mode,
     multiplier: tempo.multiplier,
     beats,

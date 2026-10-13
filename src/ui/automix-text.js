@@ -13,11 +13,13 @@ export function fmtCountdown(sec) {
   return fmtTime(Math.max(0, Math.ceil(sec - 1e-6)));
 }
 
-/** Plain words for a transition mode ('match' | 'meet' | 'cut'). */
+/** Plain words for a transition mode ('match' | 'meet' | 'cut' | 'crossfade' | 'gapless'). */
 export function mixModeText(mode) {
   if (mode === 'match') return 'beat-matched';
   if (mode === 'meet') return 'tempos meet half way';
   if (mode === 'cut') return 'quick blend';
+  if (mode === 'crossfade') return 'crossfade';
+  if (mode === 'gapless') return 'gapless';
   return '';
 }
 

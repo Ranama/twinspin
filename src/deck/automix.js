@@ -38,16 +38,38 @@
 // the next bar; a song that ends before its mix starts the next one at once; an audio restart cancels the mix
 // and re-plans; a parked next deck gets its bass back when Auto Mix lets go of it. Nothing allocates per frame;
 // the 100 ms timer only runs while Auto Mix is on, and a failing tick is logged once instead of every 100 ms.
+//
+// Music player (docs/PLAYER.md section 3; the Player facade in player.js drives these):
+//   Styles (settings.transitionStyle, re-planned on change): 'dj' (the mix above), 'crossfade' (both songs at
+//   their own tempo, an equal-power crossfade of settings.crossfadeSec that ends at the current song's musical
+//   end), 'gapless' (the next song starts exactly at the musical end, 15 ms fades).
+//   Repeat (settings.playerRepeat): 'all' starts the set list over after its last song, 'one' loads the current
+//   song again on the other deck and mixes it into itself; 'off' finishes as before.
+//   Transport, safe in any state (no-ops when they make no sense; never a takeover: every deck call is 'auto'):
+//     play()    off: switch on and start at `startItem` (the set list's current song, resumed where its deck
+//               stopped, or the first unplayed one; setEnabled(true) starts there too); paused: resume().
+//     pause()   pause the current deck (during a mix both, the crossfade and bass swap frozen); stays on.
+//     resume()  go on: a paused mix continues on its curve, both decks restarted together on the audio clock.
+//     skip()    the next song now with a 1.5 s equal-power fade (no beat matching; quickTransition); during a
+//               mix: the mix completes at once. back(): restart the song from its in-point when it is past 5 s,
+//               else the previous set-list song with the same fade. jumpTo(uid): that song now, the list goes
+//               on after it. A song that still has to load is loaded first (state stays, `pendingItem`).
+//               While paused, skip / back change the song quietly (it stays paused); jumpTo plays it.
+//     seek(sec) the current song (not during a mix); re-plans.
+//   While Auto Mix is off, skip() / back() / cue(uid) only move the set list's current song (what play() starts).
 // This file decides WHEN; automix-plan.js computes the plan (pure) and automix-deck.js does the deck / mixer work.
-// Contract: docs/AUTOMIX.md section 4.5.
+// Contract: docs/AUTOMIX.md section 4.5, docs/PLAYER.md section 3.
 
 import { Emitter } from '../core/emitter.js';
 import { clamp } from '../core/util.js';
-import { planTransition, crossfadeAt, returnSeconds } from './automix-plan.js';
+import {
+  planTransition, crossfadeAt, returnSeconds, quickTransition, isBeatMatched, transitionStyleOf, QUICK_FADE,
+} from './automix-plan.js';
 import {
   AUTO, side, targetRate, trackIs, sameSong, loadItem, waitAnalysis, parkNextDeck, glideCrossfader, preRampWindow,
   scheduleTransition, settleSwap, freezeTransition, undoTransition, playingDeck, upcomingItem, findTrackInList, trackInfo,
-  inPointOf, releaseNextDeck,
+  inPointOf, releaseNextDeck, itemAfter, itemBefore, pauseTransition, resumeTransition, completeTransition,
+  abortTransition, startPointOf, deckHolding,
 } from './automix-deck.js';
 
 const TICK_MS = 100;
@@ -66,6 +88,15 @@ const RELEASE_SEC = 2;          // s: enabling while both decks play fades the o
 const START_WAIT_MS = 8000;     // the first song waits this long for its analysis (to start at its in-point)
 const NEXT_WAIT_MS = 30000;     // the next song waits this long for its analysis (then it mixes without a grid)
 const DEFAULT_VOLUME = 0.8;
+const QUICK_LEAD = 0.1;         // s: a player skip / back / jump fade starts this far ahead on the audio clock
+const RESUME_LEAD = 0.05;       // s: a paused mix restarts both decks together this far ahead
+const BACK_RESTART_SEC = 5;     // back(): past this far into the song it restarts, else the previous song
+const RESUME_TAIL_SEC = 5;      // play(): a paused song this close to its end is started over, not resumed
+const END_EPS = 0.05;           // s: a stopped deck this close to the end of its song has ended
+const PROGRESS_TICKS = 5;       // 'change' 'progress' every 5 ticks (0.5 s) while a mix runs
+const REPEAT_MODES = ['off', 'all', 'one'];
+/** Jump target meaning "the user's own song on the prepared deck" (skip() into it). */
+const JUMP_USER = Object.freeze({ uid: null, user: true });
 
 const MSG_EMPTY = 'Add songs to the set list first.';
 const MSG_NOT_STARTED = 'Tap Start first so TwinSpin can play sound.';
@@ -136,6 +167,11 @@ export class AutoMix extends Emitter {
     this._mixer = null;
     this._mixerOff = null;
     this._offs = [];
+    this._paused = false;       // the player paused Auto Mix (it stays on)
+    this._jumpTarget = null;    // set-list item (or JUMP_USER) to fade into as soon as it is ready
+    this._resumeOnJump = false; // that jump was a jumpTo() while paused: play once there
+    this._quietList = false;    // updating the set list after a transition (its 'change' events are ours)
+    this._noSkip = new Set();   // (an empty "skipped" set for the off-state helpers)
 
     this.decks.forEach((d, i) => {
       if (!d || typeof d.on !== 'function') return;
@@ -150,6 +186,8 @@ export class AutoMix extends Emitter {
     if (settings && typeof settings.on === 'function') {
       this._offs.push(settings.on('change', (key) => {
         if (key === 'mixBeats' || key === 'automixReturn' || key === 'automixBassSwap') this._onSettings();
+        else if (key === 'transitionStyle' || key === 'crossfadeSec') this._onStyle();
+        else if (key === 'playerRepeat') this._onRepeat();
       }));
     }
     if (playlist && typeof playlist.on === 'function') this._offs.push(playlist.on('change', () => this._onPlaylist()));
@@ -197,11 +235,11 @@ export class AutoMix extends Emitter {
     return t0 === null || now === null ? null : Math.max(0, t0 - now);
   }
 
-  /** 0..1 through the running mix, else null. */
+  /** 0..1 through the running mix (held while paused), else null. */
   get progress() {
     const m = this._mix;
     if (!this._enabled || !m || m.phase !== 'mixing') return null;
-    const now = this._now();
+    const now = m.pausedAt != null ? m.pausedAt : this._now();
     return now === null ? null : clamp((now - m.t0) / m.dur, 0, 1);
   }
 
@@ -210,10 +248,68 @@ export class AutoMix extends Emitter {
     return this._enabled ? (this._mix ? this._mix.plan : this._plan) : null;
   }
 
+  /**
+   * On, and the music is paused: by pause(), or the current deck was stopped some other way (the DECKS page,
+   * an audio restart) before its song ended. resume() / play() go on.
+   */
+  get paused() {
+    if (!this._enabled) return false;
+    if (this._paused) return true;
+    if (this._mix || this._holdUntil !== null || (this._state !== 'playing' && this._state !== 'preparing')) return false;
+    const cur = this._cur !== null ? this.decks[this._cur] : null;
+    return !!(cur && cur.track && !cur.playing && !cur.loading && !(cur.duration > 0 && cur.position >= cur.duration - END_EPS));
+  }
+
+  /**
+   * The set-list item of the song playing now (while starting: the song being started), null for a song that is
+   * not in the set list (the user's own on the prepared deck) and while off.
+   */
+  get currentItem() {
+    if (!this._enabled) return null;
+    if (this._state === 'starting') return this._startItem;
+    const c = this.playlist ? this.playlist.current : null;
+    const d = this._cur !== null ? this.decks[this._cur] : null;
+    return c && d && d.track && trackIs(d.track, c) ? c : null;
+  }
+
+  /**
+   * While off: the set-list item play() starts (the current song, or the first unplayed one; after the end of
+   * the list the first one). While on: currentItem.
+   */
+  get startItem() {
+    if (this._enabled) return this.currentItem;
+    const pl = this.playlist;
+    if (!pl || !pl.length) return null;
+    const c = pl.current;
+    if (this._state !== 'finished' && c && !this._endedOnDeck(c)) return c;
+    return upcomingItem(pl, this._noSkip, 'off') || pl.items[0] || null;
+  }
+
+  /** A stopped deck holds this song at its very end (it played out after Auto Mix was switched off). */
+  _endedOnDeck(item) {
+    for (const d of this.decks) {
+      if (d && d.track && !d.playing && !d.loading && d.duration > 0 && d.position >= d.duration - 0.5 && trackIs(d.track, item)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** A song the player is waiting for (loading) to jump to, or null. */
+  get pendingItem() {
+    const j = this._jumpTarget;
+    if (!this._enabled || !j) return null;
+    return j === JUMP_USER ? (this._next ? this._next.label : null) : j;
+  }
+
   // ---------------------------------------------------------------------------------------------------------
   // Controls
 
-  /** Switch Auto Mix on or off. Returns the new state (false when it could not start, with an 'error'). */
+  /**
+   * Switch Auto Mix on or off. Returns the new state (false when it could not start, with an 'error'). On: a
+   * playing deck becomes current; else the queue starts at startItem, the same song play() starts (a paused deck
+   * that holds it plays on from where it is).
+   */
   setEnabled(on) {
     const want = !!on;
     if (want === this._enabled) return this._enabled;
@@ -221,6 +317,26 @@ export class AutoMix extends Emitter {
       this._shutdown('off');
       return false;
     }
+    return this._enable(this.startItem, true);
+  }
+
+  /** While off: make this set-list song the one play() (and switching on) starts. Returns true when it did. */
+  cue(uid) {
+    if (this._enabled || !this.playlist) return false;
+    const item = this.playlist.get(uid);
+    return item ? this._moveStart(item) : false;
+  }
+
+  toggle() {
+    return this.setEnabled(!this._enabled);
+  }
+
+  /**
+   * Switch on. A playing deck becomes current (its song found in the set list). Otherwise `item` (or the first
+   * unplayed song) is loaded on deck A and started; with `resume`, a paused deck that already holds that song
+   * simply plays on from where it is.
+   */
+  _enable(item, resume) {
     if (!this.playlist || !this.playlist.length) {
       this.emit('error', MSG_EMPTY);
       return false;
@@ -234,26 +350,444 @@ export class AutoMix extends Emitter {
     this._watchMixer();
     this._timer = this._deps.setInterval(() => this._safeTick(), TICK_MS);
     const playing = playingDeck(this.decks, this._mixerNow());
-    if (playing === null) {
-      this._startFromIdle();
-    } else {
+    const held = playing === null && item && resume ? deckHolding(this.decks, item, RESUME_TAIL_SEC) : null;
+    if (playing !== null) {
       this._cur = playing;
       this._adoptCurrentSong();
       this._setState('playing');
       this._releaseOtherDeck();
       this._prepareNext();
+    } else if (held !== null) {
+      // the song is still on a deck (paused, e.g. Auto Mix was switched off meanwhile): play on from there
+      const deck = this.decks[held];
+      this._cur = held;
+      this.playlist.setCurrent(item.uid);
+      this._readyToPlay(held);
+      const start = this._startPoint(deck);
+      if (deck.position < start - 0.001) deck.seek(start, AUTO);
+      deck.play(AUTO);
+      this._setState('playing');
+      this._prepareNext();
+    } else {
+      this._startFromIdle(item);
     }
     this._changed('enabled');
     return this._enabled;
   }
 
-  toggle() {
-    return this.setEnabled(!this._enabled);
+  // ---------------------------------------------------------------------------------------------------------
+  // Player transport (docs/PLAYER.md section 3). Never a takeover: every deck call passes { source: 'auto' }.
+
+  /** Off: switch on and play the set list from its current song (see startItem). Paused: resume. */
+  play() {
+    if (this._enabled) return this.paused ? this.resume() : true;
+    const ok = this.setEnabled(true);
+    if (ok) this._changed('transport');
+    return ok;
+  }
+
+  /**
+   * Pause the music without switching Auto Mix off: the current deck stops; during a mix both decks stop with
+   * the crossfade and bass swap frozen (resume() continues them). A mix that is only prepared is undone (the
+   * plan is made again on resume). Returns true when it paused.
+   */
+  pause() {
+    if (!this._enabled || this.paused) return false;
+    this._paused = true;
+    if (this._state !== 'starting') {
+      if (this._holdUntil !== null) this._endHold();
+      const m = this._mix;
+      const now = this._now();
+      if (m && this._mixing(m)) {
+        if (m.syncOn) this._syncOff(m.next);
+        m.syncOn = false;
+        pauseTransition(m, this.decks[m.cur], this.decks[m.next], this._mixerNow(), now);
+      } else {
+        const cur = this.decks[this._cur];
+        if (m) {
+          this._stopRamp(cur);
+          this._cancelSession(false);
+        }
+        if (cur && cur.playing) cur.pause(AUTO);
+        this._t0Est = null;
+      }
+    }
+    this._changed('transport');
+    return true;
+  }
+
+  /** Go on after pause() (or after the current deck was stopped elsewhere). Returns true when it resumed. */
+  resume() {
+    if (!this._enabled || !this.paused) return false;
+    this._paused = false;
+    const now = this._now();
+    const m = this._mix;
+    if (m && m.pausedAt != null) {
+      if (now !== null) {
+        const tr = resumeTransition(m, this.decks[m.cur], this.decks[m.next], this._mixerNow(), now, RESUME_LEAD);
+        m.syncAt = tr + SYNC_DELAY;
+      } else {
+        m.pausedAt = null;
+      }
+    } else if (this._state !== 'starting' && this._cur !== null) {
+      const cur = this.decks[this._cur];
+      if (cur && cur.track && !cur.playing && !cur.loading) {
+        if (cur.duration > 0 && cur.position >= cur.duration - END_EPS) this._onEnded(this._cur);
+        else cur.play(AUTO);
+      }
+      if (this._replan(true)) this._park();
+    }
+    this._changed('transport');
+    return true;
+  }
+
+  /**
+   * The next song now: a quick equal-power fade (QUICK_FADE, no beat matching) into it, once it is loaded.
+   * During a mix the mix completes at once. Off: the set list's current song moves on (what play() starts).
+   */
+  skip() {
+    const pl = this.playlist;
+    if (!pl) return false;
+    const wrap = this._repeat() !== 'off';
+    if (!this._enabled) {
+      const s = this.startItem;
+      const t = s ? itemAfter(pl, s.uid, this._noSkip, wrap) : null;
+      return t ? this._moveStart(t) : false;
+    }
+    if (this._state === 'starting') {
+      const t = this._startItem ? itemAfter(pl, this._startItem.uid, this._skipped, wrap) : null;
+      if (!t) return false;
+      this._startFromIdle(t);
+      this._changed('transport');
+      return true;
+    }
+    const m = this._mix;
+    if (m && (this._mixing(m) || (m.plan.quick && m.phase === 'scheduled'))) {
+      // during a mix (or a skip fade about to start): the incoming song takes over at once
+      this._completeMix();
+      this._changed('transport');
+      return true;
+    }
+    const n = this._next;
+    if (n && n.source === 'user' && !(this._jumpTarget && this._jumpTarget !== JUMP_USER)) {
+      return this._jumpToItem(JUMP_USER);
+    }
+    // from a song we are already waiting for (skip pressed twice), else from the current one
+    const j = this._jumpTarget && this._jumpTarget !== JUMP_USER ? this._jumpTarget : null;
+    const base = j || this.currentItem;
+    const t = base ? itemAfter(pl, base.uid, this._skipped, wrap) : upcomingItem(pl, this._skipped, wrap ? 'all' : 'off');
+    if (!t) {
+      this.emit('error', MSG_LAST);
+      return false;
+    }
+    return this._jumpToItem(t);
+  }
+
+  /**
+   * Past 5 s into the song: restart it from its in-point (during a mix: the song being mixed out, the mix is
+   * called off). Otherwise the previous set-list song with the quick fade. Off: moves the set list's current
+   * song back (or restarts a paused deck that holds it).
+   */
+  back() {
+    const pl = this.playlist;
+    if (!pl) return false;
+    if (!this._enabled) return this._backWhileOff();
+    if (this._state === 'starting') {
+      const t = this._startItem ? itemBefore(pl, this._startItem.uid, this._skipped) : null;
+      if (!t) return false;
+      this._startFromIdle(t);
+      this._changed('transport');
+      return true;
+    }
+    if (this._jumpTarget) {
+      // back while waiting for a song skip() asked for: stay on this one
+      this._jumpTarget = null;
+      this._resumeOnJump = false;
+      if (!this._mix) this._prepareNext();
+      this._changed('transport');
+      return true;
+    }
+    const cur = this._cur !== null ? this.decks[this._cur] : null;
+    if (!cur || !cur.track) return false;
+    const item = this.currentItem;
+    // a song that is not in the set list (the user's own): its "previous" is the set list's current song
+    const prev = item ? itemBefore(pl, item.uid, this._skipped) : pl.current;
+    if (cur.position - this._startPoint(cur) > BACK_RESTART_SEC || !prev) return this._restartCurrent();
+    const m = this._mix;
+    if (m && this._mixing(m)) this._completeMix(); // (then fade from the new song to the previous one)
+    return this._jumpToItem(prev);
+  }
+
+  /**
+   * Play this set-list item now with the quick fade; the list goes on after it. Off: switch on and start
+   * there. The current song itself: restart it. Paused: it plays ("play it now"; skip / back keep the pause),
+   * starting at once from its start once it is loaded.
+   */
+  jumpTo(uid) {
+    const item = this.playlist ? this.playlist.get(uid) : null;
+    if (!item) return false;
+    if (!this._enabled) {
+      if (playingDeck(this.decks, this._mixerNow()) === null) {
+        const ok = this._enable(item, false);
+        if (ok) this._changed('transport');
+        return ok;
+      }
+      if (!this.setEnabled(true)) return false;
+    }
+    const play = this.paused;
+    if (this._state === 'starting') {
+      this._paused = false;
+      this._startFromIdle(item);
+      this._changed('transport');
+      return true;
+    }
+    const m = this._mix;
+    if (m && this._mixing(m)) {
+      const into = m.item && m.source === 'auto' && m.item.uid === uid;
+      this._completeMix();
+      if (into) {
+        if (play) this.resume();
+        this._changed('transport');
+        return true;
+      }
+    }
+    const curItem = this.currentItem;
+    if (curItem && curItem.uid === uid) {
+      const ok = this._restartCurrent();
+      if (play) this.resume();
+      return ok;
+    }
+    return this._jumpToItem(item, play);
+  }
+
+  /** Seek the current song (not during a mix, nor while it starts); re-plans. Off: a paused deck holding it. */
+  seek(sec) {
+    if (!Number.isFinite(sec)) return false;
+    if (!this._enabled) {
+      const s = this.startItem;
+      const i = s ? deckHolding(this.decks, s, 0) : null;
+      if (i === null) return false;
+      const d = this.decks[i];
+      d.seek(clamp(sec, 0, Math.max(0, d.duration - END_EPS)), AUTO);
+      this._changed('transport');
+      return true;
+    }
+    if (this._state === 'starting' || this._cur === null) return false;
+    const m = this._mix;
+    if (m && this._mixing(m)) return false;
+    const cur = this.decks[this._cur];
+    if (!cur || !cur.track || cur.loading) return false;
+    if (m) this._cancelSession(true, true);
+    cur.seek(clamp(sec, 0, Math.max(0, cur.duration - END_EPS)), AUTO);
+    this._lateFrom = null;
+    this._noPreRamp = false;
+    this._setState('playing');
+    this._replan(true);
+    this._cueNext();
+    this._changed('transport');
+    return true;
+  }
+
+  /** Off: make `item` the set list's current song (what play() starts). */
+  _moveStart(item) {
+    this.playlist.setCurrent(item.uid);
+    if (this._state === 'finished') this._setState('off'); // (the list does not start over any more)
+    this._changed('transport');
+    return true;
+  }
+
+  /** back() while off: restart a paused song that is past 5 s, else move the set list's current song back. */
+  _backWhileOff() {
+    const s = this.startItem;
+    if (!s) return false;
+    const i = deckHolding(this.decks, s, 0);
+    if (i !== null) {
+      const d = this.decks[i];
+      const start = this._startPoint(d);
+      if (d.position - start > BACK_RESTART_SEC) {
+        d.seek(start, AUTO);
+        this._changed('transport');
+        return true;
+      }
+    }
+    const t = itemBefore(this.playlist, s.uid, this._noSkip);
+    return t ? this._moveStart(t) : false;
+  }
+
+  /**
+   * The current song from its start point again. During a mix it is the song being mixed out: the mix is called
+   * off (the incoming deck stops and is parked again, the crossfader goes back). A pending jump is dropped.
+   */
+  _restartCurrent() {
+    const wasPaused = this.paused;
+    const m = this._mix;
+    const cur = this.decks[this._cur];
+    if (m && this._mixing(m)) {
+      this._mix = null;
+      if (m.syncOn) this._syncOff(m.next);
+      abortTransition(m, this.decks[m.cur], this.decks[m.next], this._mixerNow());
+      this._setXfade(side(m.cur));
+      // an echo out already under way would stop the deck a moment later: a transport command cancels that
+      if (m.plan.echoOut && m.echoDone && cur.playing) cur.pause(AUTO);
+    } else if (m) {
+      this._stopRamp(cur);
+      this._cancelSession(false, true);
+    }
+    // the song starts over at the tempo it had before this transition (a meet pre-ramp / meet mix moved it)
+    if (m && m.cur === this._cur && cur.tempoSource === 'auto' && Math.abs(targetRate(cur) - m.baseRate) > 1e-6) {
+      cur.rampTempo(m.baseRate, 0);
+    }
+    this._jumpTarget = null;
+    cur.seek(this._startPoint(cur), AUTO);
+    if (!wasPaused && !cur.playing) cur.play(AUTO);
+    this._lateFrom = null;
+    this._noPreRamp = false;
+    this._t0Est = null;
+    this._setState('playing');
+    this._prepareNext();
+    this._replan(true);
+    this._cueNext();
+    this._changed('transport');
+    return true;
+  }
+
+  /**
+   * Go to `target` (a set-list item, or JUMP_USER: the user's song on the prepared deck) with the quick fade:
+   * at once when it is ready on the other deck, else after it is loaded (state 'playing' meanwhile; the current
+   * song goes on). A prepared (not yet started) mix is called off first.
+   */
+  _jumpToItem(target, play = false) {
+    const m = this._mix;
+    if (m && this._mixing(m)) return false;
+    if (m) {
+      this._stopRamp(this.decks[m.cur]);
+      this._cancelSession(false, true);
+      this._setState('playing');
+    }
+    // `play`: jumpTo while paused plays the song (kept when skip goes on from a song still loading for it)
+    this._resumeOnJump = play || (!!this._jumpTarget && this._resumeOnJump);
+    this._jumpTarget = target;
+    if (target !== JUMP_USER) {
+      this._skipped.delete(target.uid); // a song picked by hand gets another try
+      if (this._next && this._next.source === 'user') this._next = null; // the pick replaces the user's song
+    }
+    this._prepareNext();
+    const n = this._next;
+    if (n && n.ready && this._jumpWanted(n)) this._quickFade();
+    this._changed('transport');
+    return true;
+  }
+
+  /** Is the prepared next song the one a pending jump waits for? */
+  _jumpWanted(rec) {
+    const j = this._jumpTarget;
+    if (!j || !rec) return false;
+    return j === JUMP_USER ? rec.source === 'user' : rec.source === 'auto' && rec.item === j;
+  }
+
+  /**
+   * Fade into the prepared next song now (QUICK_FADE, both at their own tempo, from its start point). Paused:
+   * switch to it without a fade (it stays paused). The current song already over: start it at once.
+   */
+  _quickFade() {
+    const n = this._next;
+    this._jumpTarget = null;
+    if (!n || !n.ready || this._cur === null || n.deck === this._cur) return false;
+    const cur = this.decks[this._cur];
+    const next = this.decks[n.deck];
+    const play = this._resumeOnJump;
+    this._resumeOnJump = false;
+    if (this.paused) {
+      // (also a song stopped on the DECKS page: the player shows it as paused, so it stays quiet the same way)
+      this._switchTo(n);
+      if (play) this.resume(); // jumpTo while paused: the song starts at once from its start
+      return true;
+    }
+    const now = this._now();
+    if (!cur.playing || now === null) {
+      n.jumped = true;
+      this._startNextNow();
+      return true;
+    }
+    if (this._mix) this._cancelSession(false, true);
+    const t0 = now + QUICK_LEAD;
+    this._plan = quickTransition({
+      outAt: cur.positionAt(t0), inAt: this._startPoint(next), curRate: targetRate(cur), fadeSec: QUICK_FADE,
+    });
+    this._planFor = null;
+    this._beginSession('scheduled');
+    this._schedule(t0, now);
+    return true;
+  }
+
+  /** Paused: the prepared next song becomes the current one, parked at its start point (no fade, no sound). */
+  _switchTo(n) {
+    const next = this.decks[n.deck];
+    this._syncOff(n.deck);
+    if (next.playing) next.pause(AUTO);
+    if (Math.abs(targetRate(next) - 1) > 1e-9) next.rampTempo(1, 0);
+    const start = this._startPoint(next);
+    if (Math.abs(next.position - start) > 0.001) next.seek(start, AUTO);
+    if (next.mix.eq.low !== 0) next.setEq('low', 0, AUTO);
+    this._handover(this._cur, n.deck, n.item, n.source, true);
+  }
+
+  /** Skip during a mix: the incoming song takes over at once (crossfader over, old deck stopped). */
+  _completeMix() {
+    const m = this._mix;
+    if (!m) return;
+    this._mix = null;
+    const next = this.decks[m.next];
+    completeTransition(m, next, this._mixerNow());
+    if (!this._paused && !next.playing && next.track) next.play(AUTO);
+    this._handover(m.cur, m.next, m.item, m.source, !!m.plan.quick);
+  }
+
+  /** Enabling while both decks played: stop the fading one now (pause() came first). */
+  _endHold() {
+    this._holdUntil = null;
+    const o = this.decks[1 - this._cur];
+    const mx = this._mixerNow();
+    if (mx && typeof mx.cancelCrossfade === 'function') mx.cancelCrossfade(AUTO);
+    this._setXfade(side(this._cur));
+    if (o && o.playing) o.pause(AUTO);
+    this._prepareNext();
+  }
+
+  /** A running tempo ramp (meet pre-ramp) stops where it is. */
+  _stopRamp(deck) {
+    if (deck && Math.abs(deck.rate - targetRate(deck)) > 1e-9) deck.rampTempo(deck.rate, 0);
+  }
+
+  /** A deck Auto Mix is about to play alone: sync off, crossfader to it, volume up, bass and tempo back. */
+  _readyToPlay(i) {
+    const deck = this.decks[i];
+    this._syncOff(i);
+    this._setXfade(side(i));
+    if (!(deck.mix.volume > 0.01)) deck.setVolume(DEFAULT_VOLUME, AUTO);
+    if (deck.mix.eq.low <= -0.98) deck.setEq('low', 0, AUTO); // a bass left killed by an earlier run
+    if (deck.tempoSource !== 'user' && Math.abs(targetRate(deck) - 1) > 1e-9) deck.rampTempo(1, 0);
+  }
+
+  /** Where a song starts (in-point; musical start for 'gapless'). */
+  _startPoint(deck) {
+    return startPointOf(deck, this._bounds, this._style());
+  }
+
+  /** settings.playerRepeat: 'off' | 'all' | 'one'. */
+  _repeat() {
+    const r = this._setting('playerRepeat', 'off');
+    return REPEAT_MODES.includes(r) ? r : 'off';
+  }
+
+  _style() {
+    return transitionStyleOf(this.settings);
   }
 
   /** Start the transition now: at the next bar of the current song (as soon as the next song is ready). */
   mixNow() {
     if (!this._enabled || this._state === 'starting') return false;
+    if (this.paused) this.resume(); // (MIX NOW means music)
     const m = this._mix;
     if (m && m.phase !== 'ramp') return true; // already on its way
     if (!this._next) {
@@ -326,6 +860,9 @@ export class AutoMix extends Emitter {
     this._wasHidden = this._hidden();
     this._startToken++;
     this._startItem = null;
+    this._paused = false;
+    this._jumpTarget = null;
+    this._resumeOnJump = false;
   }
 
   /**
@@ -343,6 +880,9 @@ export class AutoMix extends Emitter {
     if (n) releaseNextDeck(this.decks[n.deck], n.touched);
     const was = this._enabled;
     this._enabled = false;
+    this._paused = false;
+    this._jumpTarget = null;
+    this._resumeOnJump = false;
     this._startToken++;
     this._startItem = null;
     this._mix = null;
@@ -356,9 +896,12 @@ export class AutoMix extends Emitter {
     if (was) this._changed('enabled');
   }
 
-  /** Nothing plays: load the first unplayed song into deck A, cue it at its in-point and play it. */
-  _startFromIdle() {
-    const item = this._firstPlayable();
+  /**
+   * Nothing plays: load `want` (or the first unplayed song) into deck A, cue it at its in-point and play it
+   * (paused: cue only). A song that fails is skipped (the one after it is tried).
+   */
+  _startFromIdle(want = null) {
+    const item = want && this.playlist.get(want.uid) && !this._skipped.has(want.uid) ? want : this._firstPlayable();
     if (!item) {
       this.emit('error', MSG_NONE_LOADED);
       this._shutdown('off');
@@ -366,6 +909,13 @@ export class AutoMix extends Emitter {
     }
     const token = ++this._startToken;
     const deck = this.decks[0];
+    if (this._next && this._next.deck === 0) {
+      this._next = null; // (a song prepared on deck A for an earlier start is loaded over)
+      this._plan = null;
+      this._planFor = null;
+      this._changed('next');
+    }
+    this._jumpTarget = null;
     this._cur = 0;
     this._startItem = item;
     this._setState('starting');
@@ -373,7 +923,7 @@ export class AutoMix extends Emitter {
       if (token !== this._startToken || !this._enabled) return undefined;
       if (!ok) {
         this._skipped.add(item.uid);
-        this._startFromIdle();
+        this._startFromIdle(itemAfter(this.playlist, item.uid, this._skipped, false));
         return undefined;
       }
       this.playlist.setCurrent(item.uid);
@@ -384,13 +934,10 @@ export class AutoMix extends Emitter {
           return;
         }
         this._startItem = null;
-        this._syncOff(0);
-        const inAt = this._inPointOf(deck);
+        this._readyToPlay(0);
+        const inAt = this._startPoint(deck);
         if (Math.abs(deck.position - inAt) > 0.001) deck.seek(inAt, AUTO);
-        this._setXfade(side(0));
-        if (!(deck.mix.volume > 0.01)) deck.setVolume(DEFAULT_VOLUME, AUTO);
-        if (deck.mix.eq.low <= -0.98) deck.setEq('low', 0, AUTO); // a bass left killed by an earlier run
-        deck.play(AUTO);
+        if (!this._paused) deck.play(AUTO);
         this._setState('playing');
         this._prepareNext();
       });
@@ -425,17 +972,29 @@ export class AutoMix extends Emitter {
   // ---------------------------------------------------------------------------------------------------------
   // The next song
 
-  /** The first set-list song after the current one that has not failed in this run. */
+  /**
+   * The song to mix into next: a song the player jumps to, else the first set-list song after the current one
+   * that has not failed in this run (repeat 'all': from the top after the last one; 'one': the current song).
+   */
   _upcoming() {
-    return upcomingItem(this.playlist, this._skipped);
+    const j = this._jumpTarget;
+    if (j && j !== JUMP_USER) {
+      if (this.playlist.get(j.uid)) return j;
+      this._jumpTarget = null; // removed from the list meanwhile
+    }
+    let repeat = this._repeat();
+    // repeat one while the user's own song (not in the set list) plays: the set list simply goes on
+    if (repeat === 'one' && this._state !== 'starting' && !this.currentItem) repeat = 'off';
+    return upcomingItem(this.playlist, this._skipped, repeat);
   }
 
-  /** _upcoming(), starting the list over when everything was played. */
+  /** The first song to start (never the current one again for repeat 'one'); the list over when all played. */
   _firstPlayable() {
-    let item = this._upcoming();
-    if (!item && this.playlist.currentIndex >= 0) {
-      this.playlist.setCurrent(-1);
-      item = this._upcoming();
+    const pl = this.playlist;
+    let item = upcomingItem(pl, this._skipped, this._repeat() === 'off' ? 'off' : 'all');
+    if (!item && pl.currentIndex >= 0) {
+      pl.setCurrent(-1);
+      item = upcomingItem(pl, this._skipped, 'off');
     }
     return item;
   }
@@ -485,6 +1044,7 @@ export class AutoMix extends Emitter {
       rec.loading = false;
       if (!ok) {
         this._skipped.add(item.uid);
+        if (this._jumpTarget === item) this._jumpTarget = null; // (the player stays on the current song)
         this._next = null;
         this._changed('next');
         this._prepareNext();
@@ -499,6 +1059,7 @@ export class AutoMix extends Emitter {
     const d = this.decks[i];
     const label = Object.freeze({ uid: null, kind: 'deck', id: null, title: `your song on deck ${(d && d.id) || (i ? 'B' : 'A')}`, artist: '' });
     const rec = { item: null, deck: i, source: 'user', loading: true, ready: false, touched: true, label };
+    this._jumpTarget = null; // the user's own pick replaces a pending player jump
     this._next = rec;
     this._plan = null;
     this._planFor = null;
@@ -531,6 +1092,11 @@ export class AutoMix extends Emitter {
       this._replan(true);
       this._cueNext();
       this._changed('next');
+      if (this._jumpWanted(rec) && !this._mix && this._state !== 'starting') {
+        this._mixAsap = false;
+        this._quickFade(); // the song the player skipped / jumped to is ready
+        return;
+      }
       if (this._mixAsap) {
         this._mixAsap = false;
         this.mixNow();
@@ -683,8 +1249,9 @@ export class AutoMix extends Emitter {
     const cur = this.decks[this._cur];
     const plan = this._plan;
     this._t0Est = null;
+    if (this._paused) return;
     if (cur && cur.track && !cur.playing && !cur.loading && !this._mixAsap && cur.duration > 0 &&
-      cur.position >= cur.duration - 0.05) {
+      cur.position >= cur.duration - END_EPS) {
       this._onEnded(this._cur); // it ran out without an 'ended' we saw (e.g. a song shorter than the mix into it)
       return;
     }
@@ -730,6 +1297,7 @@ export class AutoMix extends Emitter {
     const m = this._mix;
     const cur = this.decks[m.cur];
     const next = this.decks[m.next];
+    if (m.pausedAt != null) return; // the player paused the mix
     if (m.phase === 'ramp') {
       if (!cur.playing) {
         this._cancelSession(true);
@@ -759,9 +1327,9 @@ export class AutoMix extends Emitter {
       this._setState('mixing');
     }
     // mixing
-    if (!m.syncOn && now >= m.t0 + SYNC_DELAY) {
+    if (!m.syncOn && now >= (m.syncAt !== null ? m.syncAt : m.t0 + SYNC_DELAY)) {
       m.syncOn = true;
-      if (m.plan.mode !== 'cut' && this.sync && cur.bpm && next.bpm && cur.playing && next.playing) {
+      if (isBeatMatched(m.plan) && this.sync && cur.bpm && next.bpm && cur.playing && next.playing) {
         this.sync.setSync(m.next, true, { align: false });
       }
     }
@@ -770,7 +1338,11 @@ export class AutoMix extends Emitter {
       if (cur.playing && typeof cur.echoOut === 'function') cur.echoOut(AUTO);
     }
     if (m.manualXfade) this._setXfade(crossfadeAt((now - m.t0) / m.dur, m.from, m.to));
-    if (now >= m.t0 + m.dur + CLEANUP_DELAY) this._finishMix();
+    if (now >= m.t0 + m.dur + CLEANUP_DELAY) {
+      this._finishMix();
+      return;
+    }
+    if (++m.ticks % PROGRESS_TICKS === 0) this._changed('progress');
   }
 
   // ---------------------------------------------------------------------------------------------------------
@@ -798,8 +1370,14 @@ export class AutoMix extends Emitter {
       startedNext: false,
       nextWasRunning: false,
       syncOn: false,
+      syncAt: null,             // context time sync keeping starts (null: t0 + SYNC_DELAY)
       echoDone: false,
       manualXfade: false,
+      ticks: 0,                 // mixing ticks ('progress' events)
+      pausedAt: null,           // player pause: context time it was paused (pauseTransition)
+      resumeCur: false,
+      resumeNext: false,
+      swapIn: null,             // paused before the bass swap: its offset from t0
     };
     this._setState('preparing');
   }
@@ -824,7 +1402,7 @@ export class AutoMix extends Emitter {
   _finishMix() {
     const m = this._mix;
     this._mix = null;
-    this._handover(m.cur, m.next, m.item, m.source);
+    this._handover(m.cur, m.next, m.item, m.source, !!m.plan.quick);
   }
 
   /** The current song ended before a mix: start the next one at once (at its own tempo). */
@@ -843,14 +1421,15 @@ export class AutoMix extends Emitter {
       if (next.mix.eq.low !== 0) next.setEq('low', 0, AUTO);
       next.play(AUTO);
     }
-    this._handover(this._cur, n.deck, n.item, n.source);
+    this._handover(this._cur, n.deck, n.item, n.source, !!n.jumped);
   }
 
   /**
    * The new deck is now the current one: stop the old deck (bass and tempo back to normal, sync off), ease the
-   * new song back to its own tempo, advance the set list and preload the following song.
+   * new song back to its own tempo, advance the set list and preload the following song. `jumped`: the player
+   * skipped / jumped there (see _makeCurrent).
    */
-  _handover(oldIdx, newIdx, item, source) {
+  _handover(oldIdx, newIdx, item, source, jumped = false) {
     const old = this.decks[oldIdx];
     const neu = this.decks[newIdx];
     // the new roles first: the deck events below (tempo, transport, EQ) must never be taken for the old
@@ -874,10 +1453,44 @@ export class AutoMix extends Emitter {
       if (Math.abs(r - 1) > 1e-4) neu.rampTempo(1, returnSeconds(neu.bpm, r));
     }
     this._setState('playing');
-    // (the set list's 'change' may already start the preload; _prepareNext() below is then a no-op)
-    if (source === 'auto' && item && this.playlist.get(item.uid)) this.playlist.setCurrent(item.uid);
+    if (source === 'auto' && item && this.playlist.get(item.uid)) this._makeCurrent(item, jumped);
     this._changed('mix');
     this._prepareNext();
+  }
+
+  /**
+   * The set list's current song becomes `item` after a transition into it. A jump (player skip / back / jumpTo)
+   * goes straight there: the songs in between count as played. A normal transition into a song that was moved
+   * further down meanwhile (shuffle, a drag) moves it up next to the old current song first, so the songs in
+   * between are still to come. Past the end with repeat all the list starts over (everything unplayed).
+   * (One preload afterwards: the set list's 'change' events in between are not acted on.)
+   */
+  _makeCurrent(item, jumped) {
+    const pl = this.playlist;
+    this._quietList = true;
+    try {
+      const ci = pl.currentIndex;
+      const ii = pl.indexOf(item.uid);
+      let wrapped = false;
+      if (!jumped && ii !== ci && ii >= 0) {
+        const items = pl.items;
+        const unplayed = (from, to) => items.slice(from, to).some((it) => !this._skipped.has(it.uid));
+        // repeat all past the last song (nothing left after the old one): the list starts over. A song dragged to
+        // the top while songs after the old one are still to come was just moved: it goes back next to it.
+        if (ii < ci && this._repeat() === 'all' && !unplayed(0, ii) && !unplayed(ci + 1, items.length)) {
+          if (typeof pl.rewind === 'function') pl.rewind();
+          wrapped = true;
+        } else if (ii < ci || unplayed(ci + 1, ii)) {
+          // moved after the mix was scheduled: up next to the old song (songs that failed to load stay played)
+          pl.move(item.uid, ii < ci ? ci : ci + 1);
+        }
+      }
+      pl.setCurrent(item.uid);
+      // shuffle + repeat all: every round in a new order (the songs after the first one)
+      if (wrapped && pl.shuffle && typeof pl.reshuffle === 'function') pl.reshuffle();
+    } finally {
+      this._quietList = false;
+    }
   }
 
   /** Takeover during the mix: stop the automation where it is (both decks keep playing). */
@@ -926,6 +1539,8 @@ export class AutoMix extends Emitter {
       return;
     }
     if (!TIMING.has(name)) return; // EQ / volume / filter outside the mix are fine (the bass swap overrides)
+    // the user started the current song again by hand (DECKS page): the player is no longer paused
+    if (this._paused && i === this._cur && this.decks[i] && this.decks[i].playing) this._paused = false;
     if (m && m.phase === 'ramp' && i === m.next && name !== 'load' && name !== 'eject') {
       // the user previews the next song during the pre-ramp: nothing is scheduled on that deck yet, so the
       // current song keeps gliding to the meet tempo (the mix puts the next deck on its in-point when scheduled)
@@ -1014,8 +1629,41 @@ export class AutoMix extends Emitter {
     this._cueNext();
   }
 
+  /** The transition style or crossfade length changed: re-plan now (a prepared mix that has not started too). */
+  _onStyle() {
+    if (!this._enabled || this._state === 'starting') return;
+    const m = this._mix;
+    if (m) {
+      if (this._mixing(m) || m.plan.quick) return; // this transition goes on as it is
+      this._cancelSession(true); // (re-plans in the new style)
+      return;
+    }
+    this._replan(true);
+    this._cueNext();
+  }
+
+  /** Repeat changed: the next song may be another one (a prepared mix that has not started is called off). */
+  _onRepeat() {
+    if (!this._enabled || this._state === 'starting') return;
+    const m = this._mix;
+    if (m) {
+      if (this._mixing(m) || m.plan.quick) return;
+      this._cancelSession(true);
+    }
+    this._prepareNext();
+  }
+
   _onPlaylist() {
-    if (!this._enabled || this._mix || this._state !== 'playing') return;
+    if (!this._enabled || this._quietList) return;
+    const m = this._mix;
+    if (m && !this._mixing(m) && !m.plan.quick && m.source === 'auto' && m.item && !this.playlist.get(m.item.uid)) {
+      // the song a prepared (not yet audible) mix goes into left the queue (removed, Clear queue): call the mix
+      // off; the queue goes on without it (or the current song plays out)
+      this._cancelSession(true);
+      this._prepareNext();
+      return;
+    }
+    if (this._mix || this._state !== 'playing') return;
     this._prepareNext();
   }
 

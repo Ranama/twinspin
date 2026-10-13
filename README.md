@@ -31,6 +31,10 @@ before loading your own music.
   * a **bass swap** half way through, so the two bass lines never clash
   * afterwards the new song **eases back** to its own tempo
   * MIX NOW, 16 / 32 / 64-beat transitions, and you can take over at any moment
+* **Music player page**: the set list is the queue. Play / pause, previous, next, shuffle, repeat (off / all / one),
+  a seek bar, Up next (drag to reorder, tap to play now), History, master volume, and the choice of transition:
+  **DJ mix**, **Crossfade** (2 to 12 s) or **Gapless**. Play now / Play next / Add to queue from the Songs page;
+  lock screen and headset controls where the browser offers them
 * **Headphone pre-listen** (cue) on a second output: speaker + headphones on a computer, a split cable or a
   second device on a phone (see [Outputs](#outputs-speaker-and-headphones))
 * **Made for thumbs first**: big controls on a small phone, both decks side by side when you turn it sideways,
@@ -91,7 +95,7 @@ Sliders never jump to your finger: grab them anywhere and move. Double-tap any s
 for a moment for fine control.
 
 **Phone, upright:** the top bar shows both songs (deck A blue on the left, deck B orange on the right), then the
-waveforms, one page at a time, the crossfader and the tabs **DECKS / MIX / FX / SONGS / AUTO MIX**.
+waveforms, one page at a time, the crossfader and the tabs **DECKS / MIX / FX / SONGS / PLAYER**.
 **Phone sideways:** deck A left, deck B right, waveforms and mixer in the middle. **Tablets and computers** show
 everything at once.
 
@@ -106,12 +110,14 @@ everything at once.
 | **MIX page** | Headphone buttons (pre-listen), FILTER, HI / MID / LOW (all the way down = kill), deck volumes, MASTER. |
 | **Crossfader** | Blends from deck A (left) to deck B (right). Smooth or Cut curve (for scratching) in Settings. |
 | **FX page** | Pick deck A or B, then ECHO, REVERB, FLANGER, CRUSH (tap = on/off, hold = only while held), AMOUNT, LOOP 1 / 2 / 4 / 8, ECHO OUT, BRAKE. |
-| **SONGS page** | **+ Add music**, Auto Mix and the set list, your songs with big **A** / **B** load buttons and **+** (add to the set list), the demo tracks. |
-| **Menu** | Outputs, Settings and Help. |
+| **SONGS page** | **+ Add music**, Auto Mix and the set list, your songs with big **A** / **B** load buttons, **+** (add to the set list = the queue) and **⋯** (Play now, Play next, Add to queue, Remove), the demo tracks. |
+| **PLAYER page** | The queue as a music player: the song now playing (its record spins), seek bar, shuffle / previous / play / next / repeat, AUTO MIX switch, transition (DJ mix, Crossfade, Gapless), volume, Up next (drag the handle, x removes, tap plays it now), History, Clear queue. On a computer it opens from the header, sideways on a phone from the PLAYER button over the waveforms. On the DECKS page the strip shows what comes next with previous / play-pause / next; tap it to open the player. |
+| **Menu** | Outputs, Songs, the music player, Settings and Help. |
 
 **Keyboard (computer):** deck A `Q` play, `W` cue, `E` sync, `1 2 3 4` loops of 1, 2, 4, 8 beats; deck B `P` play,
 `O` cue, `I` sync, `7 8 9 0` loops; `<-` `->` crossfader (`Shift` for small steps); `M` Auto Mix on / off; `Esc`
-closes a panel. You can also drop audio files on a deck.
+closes a panel; music player: `Space` play / pause (while the player is open), `N` next song, `B` previous song. You
+can also drop audio files on a deck.
 
 **A first mix:** load a song on deck A and press PLAY. Load another on deck B, press SYNC on deck B, press PLAY
 on B, then slide the crossfader from A to B.
@@ -123,8 +129,9 @@ Auto Mix plays your set list from top to bottom and mixes each song into the nex
 1. **Build a set list** on the SONGS page: tap **+** on any song (or **Add all**). Songs you add with **+ Add
    music** go to the end of the list too. Drag a row's handle to change the order. A song can be on the list
    more than once.
-2. **Switch on AUTO MIX** (on the SONGS page, in the tab bar, or press `M`). If nothing is playing, the first
-   song starts on deck A; if a song is already playing, Auto Mix carries on from there.
+2. **Switch on AUTO MIX** (on the SONGS page, on the PLAYER page or its big play button, in the tablet tab bar, or
+   press `M`). If nothing is playing, the song the player shows as ready starts on deck A (the top of a new list);
+   if a song is already playing, Auto Mix carries on from there.
 3. The next song is prepared on the other deck, and a countdown shows when the mix starts. **MIX NOW** starts it
    at the next bar.
 
@@ -138,7 +145,9 @@ How a transition works:
 * The crossfader follows an equal-power curve over 16, 32 or 64 beats. Half way through, the bass moves from the
   old song to the new one (bass swap); the EQ knobs show it happening.
 * After the mix, the new song eases back to its own tempo, about 1 % per 8 beats.
-* At the end of the list the last song plays out and Auto Mix switches off.
+* At the end of the list the last song plays out and Auto Mix switches off (with repeat on in the player, the list
+  starts over, or the song plays again).
+* The PLAYER page can also move between songs with a plain crossfade or gapless instead of a DJ mix.
 
 Mix length, ease back and bass swap are in **Menu -> Settings**. Touch the crossfader or a control of a deck
 that is being mixed and Auto Mix hands the mix over to you ("You took over the mix"); switch it on again whenever

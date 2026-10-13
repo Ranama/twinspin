@@ -1,14 +1,16 @@
 // SONGS panel: "+ Add music" (a <label> wrapping the file input, so the native picker opens everywhere), the
 // SET LIST with the AUTO MIX switch (setlist-ui.js), the user's library (title, artist, BPM, duration) with big
-// A / B load buttons, a + (add to the set list) button and a two-step remove, the demo tracks, storage use, and
-// a plain "Where are my songs?" hint per platform. It is the SONGS page on phones and tablets, a sheet over the
-// centre column in phone landscape and a bottom drawer on the desktop console.
+// A / B load buttons, a + (add to the set list = the player's queue) button and, with a Player, a ⋯ button for
+// Play now / Play next / Add to queue / Remove (sheets/song-sheet.js; without a Player a two-step remove), the
+// demo tracks, storage use, and a plain "Where are my songs?" hint per platform. It is the SONGS page on phones
+// and tablets, a sheet over the centre column in phone landscape and a bottom drawer on the desktop console.
 //   const songs = new SongsUI(app);  shell.append(songs.el);  songs.render();
 // List buttons fire on click (not pointerdown) because the list scrolls.
 
 import { h, icon, setKids, fileLabel } from './dom.js';
 import { songMeta, songTitle, fmtBytes } from './format.js';
 import { SetListUI } from './setlist-ui.js';
+import { songSheet } from './sheets/song-sheet.js';
 import { env } from '../core/env.js';
 import { ACCEPT } from '../audio/decode.js';
 import { DEMO_TRACKS } from '../audio/demo-synth.js';
@@ -73,17 +75,21 @@ export class SongsUI {
   }
 
   _renderDemos() {
-    const rows = DEMO_TRACKS.map((d) => this._row({
-      key: `demo-${d.id}`,
-      title: d.title,
-      meta: `${d.artist} · ${d.bpm} BPM`,
-      loadedOn: (i) => {
-        const t = this.app.decks[i] && this.app.decks[i].track;
-        return !!t && t.source === 'demo' && t.title === d.title;
-      },
-      onLoad: (i) => this.app.loadDemo(i, d.id),
-      onAdd: () => this.app.addToSetList([{ kind: 'demo', id: d.id, title: d.title, artist: d.artist, bpm: d.bpm }]),
-    }));
+    const rows = DEMO_TRACKS.map((d) => {
+      const entry = { kind: 'demo', id: d.id, title: d.title, artist: d.artist, bpm: d.bpm };
+      return this._row({
+        key: `demo-${d.id}`,
+        title: d.title,
+        meta: `${d.artist} · ${d.bpm} BPM`,
+        entry,
+        loadedOn: (i) => {
+          const t = this.app.decks[i] && this.app.decks[i].track;
+          return !!t && t.source === 'demo' && t.title === d.title;
+        },
+        onLoad: (i) => this.app.loadDemo(i, d.id),
+        onAdd: () => this.app.addToSetList([entry]),
+      });
+    });
     setKids(this.demoList, rows);
   }
 
@@ -112,6 +118,7 @@ export class SongsUI {
         key: e.id,
         title: songTitle(e),
         meta: songMeta(e),
+        entry: e,
         loadedOn: (i) => {
           const d = app.decks[i];
           const t = d && d.track;
@@ -134,7 +141,13 @@ export class SongsUI {
     this.setList.render();
   }
 
-  _row({ key, title, meta, loadedOn, onLoad, onAdd, onRemove }) {
+  /**
+   * One song row: title + meta, A / B load buttons, + (add to the set list = the queue) and, with a Player, a ⋯
+   * button for Play now / Play next / Add to queue / Remove (song-sheet.js); without a Player the two-step
+   * remove button stays on the row.
+   */
+  _row({ key, title, meta, entry, loadedOn, onLoad, onAdd, onRemove }) {
+    const app = this.app;
     const btn = (i) => {
       const id = i ? 'B' : 'A';
       const loaded = loadedOn(i);
@@ -147,8 +160,8 @@ export class SongsUI {
       h('div.song-info', {}, h('span.song-title', { text: title }), meta ? h('span.song-meta', { text: meta }) : null),
       btn(0), btn(1),
     ];
-    if (onAdd && this.app.playlist) {
-      const add = h('button.add-btn', { type: 'button', 'aria-label': `Add ${title} to the set list` }, icon('plus'));
+    if (onAdd && app.playlist) {
+      const add = h('button.add-btn', { type: 'button', 'aria-label': `Add ${title} to the queue (set list)` }, icon('plus'));
       add.addEventListener('click', () => {
         onAdd();
         add.classList.add('added');
@@ -156,15 +169,42 @@ export class SongsUI {
       });
       kids.push(add);
     }
-    if (onRemove) {
+    const menu = !!(app.player && entry);
+    if (menu) {
+      const more = h('button.icon-btn.song-more', { type: 'button', 'aria-haspopup': 'dialog',
+        'aria-label': `More for ${title}: play now, play next, add to queue${onRemove ? ', remove' : ''}` }, icon('more'));
+      more.addEventListener('click', () => {
+        app.sheets.open(songSheet(app, { title, meta, entry, onRemove: onRemove ? () => this._removeAsk(entry) : null }));
+      });
+      kids.push(more);
+    } else if (onRemove) {
       const armed = this.armed && this.armed.id === key;
       const rm = h(`button.icon-btn.song-rm${armed ? '.armed' : ''}`, { type: 'button', 'aria-label': armed ? `Confirm remove ${title}` : `Remove ${title}` },
         armed ? h('span.rm-text', { text: 'Remove?' }) : icon('trash'));
       rm.addEventListener('click', onRemove);
       kids.push(rm);
     }
-    const cls = `div.song-row${this.app.playlist && onAdd ? '.with-add' : ''}${onRemove ? '' : '.no-rm'}`;
+    const cls = `div.song-row${app.playlist && onAdd ? '.with-add' : ''}${menu ? '.with-menu' : onRemove ? '' : '.no-rm'}`;
     return h(cls, { role: 'listitem', dataset: { key: String(key) } }, kids);
+  }
+
+  /** Remove a library song from the ⋯ sheet: asks first (the row has no two-step button then). */
+  async _removeAsk(entry) {
+    const title = songTitle(entry);
+    const ok = await this.app.dialog.confirm({
+      title: 'Remove this song?',
+      message: `“${title}” is deleted from this device and leaves the queue. Songs on the decks keep playing.`,
+      ok: 'Remove', cancel: 'Keep it', danger: true,
+    });
+    if (!ok) return;
+    const lib = this.app.library;
+    try {
+      await lib.remove(entry.id);
+      this.app.toast(`Removed “${title}”`, { kind: 'ok' });
+    } catch {
+      this.app.toast("That song couldn't be removed. Try again.", { kind: 'error' });
+    }
+    this.render();
   }
 
   _addAllLibrary() {

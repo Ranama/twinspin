@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Fast launcher for JsCheck: ~0.3 s per call instead of ~1.4 s for `dotnet run`.
+# Builds (Release) on first use and whenever a source file is newer than the built DLL.
+# If that rebuild fails while an older build exists (typically because another JsCheck process is
+# running and Windows keeps its DLL locked), it warns on stderr and runs the older build.
+# Usage: tools/JsCheck/jscheck check src tests   |   tools/JsCheck/jscheck test tests   |   tools/JsCheck/jscheck run tests/pwa.test.js
+dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+dll="$dir/bin/Release/net10.0/JsCheck.dll"
+if [ ! -f "$dll" ] || [ -n "$(find "$dir" -maxdepth 1 -type f \( -name '*.cs' -o -name 'prelude.js' -o -name '*.csproj' \) -newer "$dll" -print -quit)" ]; then
+  if build_output="$(dotnet build "$dir/JsCheck.csproj" -c Release -nologo -v q 2>&1)"; then
+    touch "$dll" # an up-to-date build may leave the old timestamp; avoid rebuilding every call
+  elif [ -f "$dll" ] && grep -q -E 'MSB302[16]|being used by another process' <<< "$build_output"; then
+    echo "jscheck: could not rebuild (the DLL is in use by another JsCheck process); running the previous build" >&2
+  else
+    echo "$build_output" >&2
+    echo "jscheck: build failed" >&2
+    exit 2
+  fi
+fi
+exec dotnet "$dll" "$@"

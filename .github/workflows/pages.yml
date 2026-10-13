@@ -1,0 +1,102 @@
+# Publishes TwinSpin to GitHub Pages on every push to main that changes the app.
+# One-time setup: repository Settings -> Pages -> Build and deployment -> Source: GitHub Actions (docs/DEPLOY.md).
+#
+#   build   (Windows) runs the tests, then tools/publish-web.ps1 exactly as on a Windows PC: it builds site/ with
+#           only the runtime files, stamps the service worker VERSION and offline SHELL list, writes 404.html for
+#           this repository's address (/<repo>/) and checks every module of the site.
+#   deploy  (Linux) hands site/ to GitHub Pages.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    # Changes that cannot change the website do not publish a new version (each publish shows "Update ready"
+    # in installed apps). Run the workflow by hand (Actions tab -> Run workflow) to publish anyway.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'tests/**'
+      - 'tools/JsCheck/**'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; a newer push waits for the running one instead of cancelling it half-way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    name: Build the website
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      # Never publish a version that fails its tests (the CI workflow runs them too, on Linux).
+      - name: Run tests
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\JsCheck\jscheck.ps1 test tests --timeout 180
+
+      # -Ci: no prompts, fails if the module check cannot run, writes a summary on the job page.
+      # GITHUB_REPOSITORY (owner/repo) gives 404.html its base: /<repo>/, or / for <owner>.github.io.
+      - name: Build site/ with tools/publish-web.ps1
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\publish-web.ps1 -Ci
+
+      - name: Keep site/ for the deploy job
+        uses: actions/upload-artifact@v7
+        with:
+          name: site
+          path: site
+          include-hidden-files: true # .nojekyll
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Get site/
+        uses: actions/download-artifact@v8
+        with:
+          name: site
+          path: site
+
+      # Fails with "Get Pages site failed" until Settings -> Pages -> Source is set to GitHub Actions.
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v6
+
+      - name: Package site/ for GitHub Pages
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+          include-hidden-files: true
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5

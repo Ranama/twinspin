@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    JsCheck: headless syntax/import checker and ES-module test runner for the browser client.
+    Jint (JS interpreter) + Acornima (its parser). See README.md.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>JsCheck</RootNamespace>
+    <AssemblyName>JsCheck</AssemblyName>
+    <!-- ICU stays on so Intl / toLocaleString format like a browser (costs ~35 ms at startup). -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Server GC (with .NET 9+ DATAS it starts with one heap and grows on demand) keeps parallel `test` runs
+         from stalling each other in shared gen0 collections; no measurable startup cost. -->
+    <ServerGarbageCollector>true</ServerGarbageCollector>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Jint" Version="4.16.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="prelude.js" LogicalName="prelude.js" />
+  </ItemGroup>
+
+</Project>

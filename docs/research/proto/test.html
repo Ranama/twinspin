@@ -1,0 +1,54 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>BPM tests</title></head>
+<body style="font:13px monospace;background:#fff;color:#000">
+<pre id="out">running...</pre>
+<script src="synth.js"></script>
+<script src="analyzer.js"></script>
+<script>
+const CASES = [
+  { name: 'clicks 120 @44.1k', o: { bpm: 120, pattern: 'clicks', start: 0.5 } },
+  { name: 'house 128 offbeat open-hats', o: { bpm: 128, pattern: 'house', start: 0.37 } },
+  { name: 'house 124 offbeat bass @48k', o: { sr: 48000, bpm: 124, pattern: 'houseOffbeatBass', start: 0.2 } },
+  { name: 'house 126.37 humanize 4ms', o: { bpm: 126.37, pattern: 'house', start: 0.11, humanizeMs: 4 } },
+  { name: 'house 122 silence 5.3s + 30s pad intro', o: { bpm: 122, pattern: 'house', start: 5.3, introSec: 30, pad: true } },
+  { name: 'hiphop 88 swing .62', o: { bpm: 88, pattern: 'hiphop', start: 0.25, swing: 0.62 } },
+  { name: 'hiphop 92 straight', o: { bpm: 92, pattern: 'hiphop', start: 0.05 } },
+  { name: 'hiphop 84 swing .66', o: { bpm: 84, pattern: 'hiphop', start: 0.3, swing: 0.66 } },
+  { name: 'dnb 174', o: { bpm: 174, pattern: 'dnb', start: 0.4 } },
+  { name: 'dnb 172 noisy -20dB', o: { bpm: 172, pattern: 'dnb', start: 0.15, noiseDb: -20 } },
+  { name: 'dubstep 140 halftime', o: { bpm: 140, pattern: 'dubstep', start: 0.6 } },
+  { name: 'ramp 120->124 (variable)', o: { bpm: 120, rampTo: 124, pattern: 'house', start: 0.5 }, variable: true },
+  { name: 'noise only', o: { bpm: 120, pattern: 'none', start: 0, noiseDb: -10, dur: 120 }, noise: true },
+  { name: 'pad only (no drums)', o: { bpm: 120, pattern: 'none', start: 0, pad: true, dur: 120 }, noise: true },
+  { name: 'dnb 176 swing-ish hats .58 48k', o: { sr: 48000, bpm: 176, pattern: 'dnb', start: 0.33, swing: 0.58 } },
+  { name: 'hiphop 80 noisy -20dB', o: { bpm: 80, pattern: 'hiphop', start: 1.0, noiseDb: -20, swing: 0.6 } },
+];
+function wrap(x, P) { x = ((x % P) + P) % P; return x > P / 2 ? x - P : x; }
+async function run() {
+  const out = document.getElementById('out'); const rows = [];
+  for (const c of CASES) {
+    await new Promise((r) => setTimeout(r, 0));
+    const sr = c.o.sr || 44100; const y = makeTrack(c.o);
+    const r = analyzeBeats(y, sr, window.__opts || {});
+    const P = 60 / c.o.bpm;
+    const phErrMs = c.noise || c.o.rampTo ? null : +(wrap(r.firstBeat - c.o.start, 60 / r.bpm) * 1000).toFixed(2);
+    const fourierErrMs = c.noise || c.o.rampTo || !r.debug ? null : +(wrap(r.debug.fourierT0 - c.o.start, 60 / r.bpm) * 1000).toFixed(2);
+    const contrast = r.debug ? +r.debug.contrast.toFixed(2) : null;
+    rows.push({ name: c.name, trueBpm: c.o.bpm, bpm: +r.bpm.toFixed(4), err: +(r.bpm - c.o.bpm).toFixed(4), phErrMs, fourierErrMs, contrast,
+      conf: +r.confidence.toFixed(2), variable: r.variableTempo,
+      coh: +(r.debug?.coherence ?? 0).toFixed(3), cov: +(r.debug?.coverage ?? 0).toFixed(2), rms: +(r.debug?.residRmsMs ?? 0).toFixed(1), rmax: +(r.debug?.residMaxMs ?? 0).toFixed(1),
+      acf: r.debug && +r.debug.bpmAcf.toFixed(3), zoom: r.debug && +r.debug.bpmZoom.toFixed(4), cands: r.debug?.cands, octave: r.debug?.octave ? { rho: +r.debug.octave.rho.toFixed(2), fast: r.debug.octave.choseFast } : null,
+      snapped: r.debug?.snapped, ms: Math.round(r.timings.total) });
+    out.textContent = rows.map((x) => JSON.stringify(x)).join('\n');
+  }
+  window.__results = rows; window.__done = true;
+}
+async function perf(min, sr) {
+  const y = makeTrack({ sr, dur: min * 60, bpm: 128, pattern: 'house', start: 0.3 });
+  const t = performance.now(); const r = analyzeBeats(y, sr); const ms = performance.now() - t;
+  return { min, sr, ms: Math.round(ms), timings: Object.fromEntries(Object.entries(r.timings).map(([k, v]) => [k, Math.round(v)])), bpm: r.bpm, phErrMs: +(wrap(r.firstBeat - 0.3, 60 / r.bpm) * 1000).toFixed(2) };
+}
+window.perf = perf;
+if (!location.hash.includes('manual')) run();
+</script>
+</body></html>

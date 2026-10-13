@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-layout="pp">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>TwinSpin DJ</title>
+  <meta name="description" content="A two-deck DJ app for your phone, tablet or computer: load your own songs, sync, scratch, add effects and mix.">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0b0c12">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TwinSpin">
+  <meta name="application-name" content="TwinSpin">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="referrer" content="no-referrer">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600;700&family=Unbounded:wght@500;700;800&display=swap">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/widgets.css">
+  <link rel="stylesheet" href="css/remote.css">
+  <script src="config.js"></script>
+  <script type="module" src="src/main.js"></script>
+  <!-- main.js loads the DJ app with one dynamic import; start fetching its biggest modules in parallel -->
+  <link rel="modulepreload" href="src/ui/boot-app.js">
+  <link rel="modulepreload" href="src/ui/app-ui.js">
+  <link rel="modulepreload" href="src/audio/engine.js">
+  <link rel="modulepreload" href="src/deck/deck.js">
+  <link rel="modulepreload" href="src/deck/automix.js">
+</head>
+<body>
+  <div id="app" class="booting">
+    <div class="boot-splash" aria-live="polite">
+      <span class="boot-discs" aria-hidden="true"><span class="cd cd-a"></span><span class="cd cd-b"></span></span>
+      <span class="boot-name"><span class="logo-twin">Twin</span><span class="logo-spin">Spin</span></span>
+      <span class="boot-text">Loading…</span>
+    </div>
+  </div>
+  <noscript>
+    <p class="boot-noscript">TwinSpin needs JavaScript. Turn it on in your browser settings, then reload this page.</p>
+  </noscript>
+  <script nomodule>
+    document.getElementById('app').innerHTML = '<p class="boot-noscript">This browser is too old for TwinSpin. ' +
+      'Please update it, or open TwinSpin in a recent Chrome, Safari, Edge or Firefox.</p>';
+  </script>
+</body>
+</html>

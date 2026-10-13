@@ -1,0 +1,39 @@
+# Line endings: LF for everything that is text (sources, docs, the bash launcher),
+# CRLF only for Windows scripts. Binary assets are never converted or diffed as text.
+* text=auto eol=lf
+
+# Windows scripts
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Shell scripts must stay LF so they run on Linux/macOS (and CI)
+*.sh text eol=lf
+tools/JsCheck/jscheck text eol=lf
+
+# Sources and docs (explicit, same as the default)
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.webmanifest text eol=lf
+*.svg text eol=lf
+*.cs text eol=lf
+*.csproj text eol=lf
+
+# Binary assets
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.wav binary
+*.mp3 binary
+*.m4a binary
+*.flac binary
+*.ogg binary
+*.zip binary

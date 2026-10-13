@@ -1,0 +1,36 @@
+# TwinSpin: plain static files, no build step. Keep generated output, local tools and
+# private material out of the repository.
+
+# Published build (tools/publish-web.ps1 writes these)
+site/
+site.zip
+
+# Your own test songs for tests/realsongs.test.js (skipped when missing)
+tests/media/
+
+# JsCheck build output (rebuilt on first run) and local tool downloads
+tools/JsCheck/bin/
+tools/JsCheck/obj/
+tools/cloudflared/
+
+# Private notes that must never be published
+private/
+
+# Screenshots and logs from local runs
+.shots/
+*.log
+
+# Editors and IDEs
+.vs/
+.idea/
+*.swp
+*~
+
+# OS junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+._*

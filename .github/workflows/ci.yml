@@ -1,0 +1,75 @@
+# CI: checks every JavaScript module and runs the test suite with the bundled JsCheck (.NET, no Node needed).
+# Runs on every push and pull request. The same commands work locally in Git Bash:
+#   tools/JsCheck/jscheck check src tests
+#   tools/JsCheck/jscheck test tests
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - gh-pages # the published website only (tools/publish-web.ps1 -Repo), nothing to test there
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  test:
+    name: Check and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('tools/JsCheck/JsCheck.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      # The launcher would build it on first use too; a step of its own keeps build errors easy to find.
+      - name: Build JsCheck
+        run: dotnet build tools/JsCheck/JsCheck.csproj -c Release -nologo
+
+      # Syntax, imports, exports, letter case (GitHub Pages is case-sensitive) and undeclared names.
+      # --strict: warnings fail too (docs/CONTRACT.md asks for 0 errors and 0 warnings).
+      - name: Check modules
+        run: bash tools/JsCheck/jscheck check src tests --strict
+
+      # Every tests/*.test.js. tests/realsongs.test.js skips its songs here (tests/media/ is not in git).
+      # --timeout: hosted runners are slower than a desktop; the 60 s budget per file is for local runs.
+      - name: Run tests
+        run: bash tools/JsCheck/jscheck test tests --timeout 180
+
+      # The published build writes its own offline list; this only warns when the development copy of sw.js
+      # (used through tools/phone-link) misses a file, as README.md asks to keep it complete.
+      - name: Check the offline file list in sw.js
+        shell: bash
+        run: |
+          export LC_ALL=C
+          listed=$(sed -n '/^const SHELL = \[/,/^\];/p' sw.js | grep -o "'\./[^']*'" | tr -d "'" | sed 's#^\./##' | grep -v '^$' | sort -u || true)
+          shipped=$(git ls-files css src icons | grep -v -E '(^|/)\.|(^|/)(tests?|__tests__|spec)/|\.(test|spec)\.m?js$|\.(md|map|bak|orig|tmp|log|ps1|cmd|cs|psd|xcf)$' | sort -u || true)
+          missing=$(comm -23 <(printf '%s\n' "$shipped") <(printf '%s\n' "$listed"))
+          if [ -n "$missing" ]; then
+            while IFS= read -r f; do
+              echo "::warning file=sw.js::'./$f' is not in the SHELL list of sw.js (the published site adds it by itself; add it for the development copy)"
+            done <<< "$missing"
+          else
+            echo "sw.js lists every file of css/, src/ and icons/."
+          fi

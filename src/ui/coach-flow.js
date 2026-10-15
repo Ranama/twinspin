@@ -75,6 +75,12 @@ export class CoachFlow {
   tick() {
     if (this.step < 0 || !this.coach.visible) return;
     const app = this.app;
+    // The tips teach mixing by hand. Someone who opened the music player or switched Auto Mix on is past that:
+    // end them quietly instead of pointing at deck controls over the player page.
+    if (app.page === 'player' || (app.automix && app.automix.enabled)) {
+      this.done();
+      return;
+    }
     const anyLoaded = app.decks.some((d) => d && (d.track || d.loading));
     const anyPlaying = app.decks.some((d) => d && d.playing);
     if (this.step === 0 && anyLoaded) {

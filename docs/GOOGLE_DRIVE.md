@@ -55,10 +55,17 @@ No billing account is needed. If Google asks for one, you are on the wrong page:
    * **Authorized domains:** click **Add domain** and type `ranama.github.io`.
    * **Do not upload a logo.** A logo makes Google require a brand review; without it nothing needs review.
    * Click **Save**.
-4. **Google Auth Platform > Data Access:** **Add or remove scopes** > in the filter type `drive.file` > tick
-   **`.../auth/drive.file`** ("See, edit, create and delete only the specific Google Drive files you use with this
-   app") > **Update** > **Save**.
-   (This must match what the app asks for. If it is missing, Google shows an "unverified app" warning.)
+4. **Google Auth Platform > Data Access:** click **Add or remove scopes**. The easiest way:
+   * Scroll to the **bottom** of the panel that opens, to the box **Manually add scopes**.
+   * Paste `https://www.googleapis.com/auth/drive.file` and click **Add to table**.
+   * Click **Update**, then **Save** at the bottom of the Data Access page. The scope now shows under
+     **Your non-sensitive scopes**.
+
+   (You can also find it in the list itself as **`.../auth/drive.file`**, "See, edit, create and delete only the
+   specific Google Drive files you use with this app", but the list is long and split into pages, and it only shows
+   scopes of APIs that are enabled in **this** project. If the scope is rejected or missing, check that the project
+   name at the top of the console is the one where you enabled the Google Drive API in step 2.)
+   This must match what the app asks for. If it is missing, Google shows an "unverified app" warning.
 5. **Google Auth Platform > Audience:** click **Publish app** > **Confirm**. The publishing status becomes
    **In production**.
    * With only `drive.file`, Google does not need to verify the app: there is no warning screen, no 100-user limit

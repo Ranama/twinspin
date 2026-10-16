@@ -64,7 +64,9 @@ export class Toasts {
     }
     el.addEventListener('click', close);
     this.el.append(el);
-    while (this.el.children.length > 3) this.el.firstChild.remove();
+    // at most three toasts (the import bar of sources-ui.js may sit on top of the stack: it stays)
+    const shown = Array.from(this.el.children).filter((c) => c.classList.contains('toast'));
+    for (let i = 0; i < shown.length - 3; i++) shown[i].remove();
     (kind === 'error' ? this.alert : this.live).textContent = msg;
     if (!opts.sticky) {
       const ms = opts.timeout || (opts.action ? 8000 : kind === 'error' ? 5500 : 2800);

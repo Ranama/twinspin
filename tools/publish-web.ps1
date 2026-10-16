@@ -5,9 +5,11 @@
 .DESCRIPTION
   Makes a clean, upload-ready copy of the app in <TwinSpin>\site (the folder is rebuilt on every run) with only the
   files the app needs at runtime:
-    * index.html, config.js, manifest.webmanifest, sw.js (+ any other local file index.html or the manifest uses)
+    * index.html, config.js, manifest.webmanifest, sw.js, privacy.html (+ any other local file index.html or the
+      manifest uses)
     * css\**, src\** and icons\** (without tests, notes and hidden files)
-    * NOT docs\, tests\, tools\, README.md or anything else that is for development only
+    * NOT docs\, tests\ (also not the music-server test fixture tests\fixtures\), tools\, README.md or anything
+      else that is for development only
   Then it:
     * stamps the service worker: VERSION becomes twinspin-<UTC time> (so phones see "Update ready") and its SHELL list
       becomes the exact list of files in the site (the offline copy the installed app keeps)
@@ -264,7 +266,7 @@ $NotFoundPage = @'
 
 # ------------------------------------------------------------------------------------------------------ preflight
 
-foreach ($f in @('index.html', 'config.js', 'sw.js', 'manifest.webmanifest', 'src\main.js')) {
+foreach ($f in @('index.html', 'config.js', 'sw.js', 'manifest.webmanifest', 'privacy.html', 'src\main.js')) {
   if (-not (Test-Path -LiteralPath (Join-Path $Root $f) -PathType Leaf)) { throw "$f is missing in $Root. Run this script from the TwinSpin folder (tools\publish-web.ps1)." }
 }
 $target = $null
@@ -303,7 +305,8 @@ $problems = New-Object System.Collections.Generic.List[string]
 $indexHtml = Read-Text (Join-Path $Root 'index.html')
 $manifestText = Read-Text (Join-Path $Root 'manifest.webmanifest')
 
-foreach ($n in @('index.html', 'config.js', 'manifest.webmanifest', 'sw.js')) { $plan[$n] = Join-Path $Root $n }
+# privacy.html: the plain privacy page (Google's consent screen links it; the app's Settings and Help do too).
+foreach ($n in @('index.html', 'config.js', 'manifest.webmanifest', 'sw.js', 'privacy.html')) { $plan[$n] = Join-Path $Root $n }
 
 # Every local file index.html or the manifest points at must exist (a missing stylesheet or icon breaks the site).
 $refs = @([regex]::Matches($indexHtml, '(?i)\b(?:href|src)\s*=\s*["'']([^"''#?]+)') | ForEach-Object { $_.Groups[1].Value }) +
@@ -318,7 +321,7 @@ foreach ($ref in $refs) {
     $problems.Add("'$ref' does not exist"); continue
   }
   $rel = Get-Rel $Root $p
-  if ($TestDirs -contains $rel.Split('/')[0]) { continue }
+  if ($TestDirs -contains $rel.Split('/')[0]) { continue }       # never tests\ (e.g. the tests\fixtures\ test server)
   $plan[$rel] = $p
 }
 try { [void]($manifestText | ConvertFrom-Json) } catch { $problems.Add("manifest.webmanifest is not valid JSON: $($_.Exception.Message)") }
@@ -401,7 +404,7 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
   $r = Invoke-Quiet 'git' @('-C', $Root, 'rev-parse', '--short', 'HEAD')
   if ($r.Code -eq 0 -and $r.Out.Count -gt 0 -and $r.Out[0] -match '^[0-9a-f]+$') {
     $commit = $r.Out[0]
-    $d = Invoke-Quiet 'git' @('-C', $Root, 'status', '--porcelain', '--', 'index.html', 'config.js', 'sw.js', 'manifest.webmanifest', 'css', 'src', 'icons')
+    $d = Invoke-Quiet 'git' @('-C', $Root, 'status', '--porcelain', '--', 'index.html', 'config.js', 'sw.js', 'manifest.webmanifest', 'privacy.html', 'css', 'src', 'icons')
     if ($d.Code -eq 0 -and $d.Out.Count -gt 0) { $commit += ' + uncommitted changes' }
   }
 }

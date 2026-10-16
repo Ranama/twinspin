@@ -346,3 +346,18 @@ test(`the library keeps at most ${LIBRARY_CAP} songs; the least recently used go
   assert(ids.has(first[3].id));
   assert.match(log.errors[log.errors.length - 1], /keeps up to 60 songs/);
 });
+
+test('plain songs carry the new source fields: source "file", remote null, stored true; demos are unchanged', async () => {
+  const lib = new Library({ indexedDB: new FakeIDB(), storage: null });
+  await lib.init();
+  const [e] = await lib.add([fakeFile('Artist - Plain.mp3')]);
+  assert.equal(e.source, 'file');
+  assert.equal(e.remote, null);
+  assert.equal(e.stored, true);
+  assert.equal(lib.isAvailable(e.id), true);
+  assert.equal(lib.findRemote({ kind: 'gdrive', fileId: 'whatever-id' }), null);
+  const demo = lib.list().find((x) => x.demo);
+  assert.deepEqual(Object.keys(demo).sort(), ['addedAt', 'artist', 'bpm', 'demo', 'demoId', 'fileName', 'id', 'size', 'source', 'title']);
+  const u = await lib.usage();
+  assert.equal(u.usedBytes, e.size);
+});

@@ -1,0 +1,6 @@
+# JSON answers are text; the audio and cover answers are binary files with a .view name (the static server
+# ignores the query string, so every request of a method gets the same file).
+*.view text eol=lf
+download.view binary
+stream.view binary
+getCoverArt.view binary

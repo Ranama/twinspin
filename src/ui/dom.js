@@ -72,6 +72,21 @@ const ICONS = {
   playNext: '<path d="M3 6h12M3 12h7M3 18h12"/><path d="M15 9l6 3-6 3z" fill="currentColor" stroke="none"/>',
   history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5M3.5 3.5v5h5"/><path d="M12 7.5V12l3 2"/>',
   chevronDown: '<path d="M5 9l7 7 7-7"/>',
+  // Song sources (Google Drive, music server / NAS)
+  cloud: '<path d="M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.6 9.1 4.75 4.75 0 0 0 7 18.5z"/>',
+  server: '<rect x="3.5" y="4" width="17" height="7" rx="1.6"/><rect x="3.5" y="13" width="17" height="7" rx="1.6"/>' +
+    '<path d="M7.5 7.5h.01M7.5 16.5h.01M11 7.5h6M11 16.5h6"/>',
+  phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.2"/><path d="M11 18.5h2"/>',
+  link: '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/>' +
+    '<path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/>',
+  download: '<path d="M12 3.5v11M7.5 10l4.5 4.5 4.5-4.5"/><path d="M4.5 16.5v3h15v-3"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.8-4.8"/>',
+  album: '<rect x="3.5" y="3.5" width="17" height="17" rx="2"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/>',
+  artist: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
+  playlist: '<path d="M4 6h12M4 11h12M4 16h7"/><circle cx="16.5" cy="17.5" r="2.5"/><path d="M19 17.5V9.5l2-.8"/>',
+  external: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5.5H4.5V6H10"/>',
+  logout: '<path d="M10 4.5H5.5v15H10M15 8l4 4-4 4M19 12H9.5"/>',
+  lock: '<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
 };
 
 /** Inline SVG markup for an icon name (static, trusted strings only). */

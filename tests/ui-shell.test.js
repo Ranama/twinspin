@@ -274,9 +274,12 @@ test('songs: add, load from the list with the load lock, demos, remove, drag and
   await startAudio(app);
   const [A, B] = app.decks;
   press($(app.root, '.tab-songs'), 'mouse');
-  // add music through the label-wrapped input
-  const input = $(app.root, '.btn-add input');
-  assert(input, 'file input inside the Add music label');
+  // Add music opens the sheet; This device is a label wrapping the file input (the picker opens in that tap)
+  $(app.root, '.btn-add').click();
+  assert.equal($(app.root, '.sheet').dataset.sheet, 'add-music');
+  const input = $(app.root, '.add-device input');
+  assert(input, 'file input inside the This device row');
+  assert.equal(input.closest('label'), $(app.root, '.add-device'));
   assert.match(input.getAttribute('accept'), /\.mp3/);
   input.files = [{ name: 'one.mp3', size: 100, type: 'audio/mpeg' }, { name: 'notes.pdf', size: 5, type: 'application/pdf' }];
   input.dispatchEvent(new FakeEvent('change'));

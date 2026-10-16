@@ -1,0 +1,844 @@
+/* Song sources (docs/SOURCES.md section 4): the Add music sheet, the Google Drive link form, the music server
+   browser (connect form, tabs, album grid, song rows, album / playlist / artist pages), the import bar, the small
+   cloud / server badges on song rows and the deck chip while a song downloads. (The phone-sized Google Picker
+   rules are injected by src/sources/gdrive.js, PICKER_CSS.)
+   Tokens come from css/app.css. Text fields use 16 px text so iPhone Safari never zooms in on focus. */
+
+/* ------------------------------------------------------------------------------------------- Add music */
+
+.add-opt {
+  min-height: 68px;
+  gap: 14px;
+  cursor: pointer;
+}
+
+.add-opt .row-label {
+  font-size: 17px;
+}
+
+.add-opt-ico {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.add-opt-ico .ico {
+  width: 24px;
+  height: 24px;
+}
+
+.add-device .add-opt-ico { color: var(--play); }
+.add-drive .add-opt-ico { color: #8ab4ff; }
+.add-server .add-opt-ico { color: var(--deck-b); }
+.add-link .add-opt-ico { color: var(--cue); }
+
+label.add-opt:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+.add-explain {
+  margin: 0 0 10px 58px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--well);
+  border: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.add-explain + .row {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.add-explain p {
+  margin: 0 0 8px;
+}
+
+.add-other summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.add-other summary::-webkit-details-marker {
+  display: none;
+}
+
+.add-other-chev {
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  color: var(--faint);
+  transition: transform 0.15s;
+}
+
+.add-other[open] .add-other-chev {
+  transform: rotate(180deg);
+}
+
+.add-way {
+  margin-top: 10px;
+}
+
+.add-way-h {
+  margin: 10px 0 2px;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.add-guides {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 12px 0 4px;
+}
+
+.add-privacy {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+/* links to the guides (open in a new tab) */
+.src-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  color: #8ab4ff;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.add-privacy .src-link,
+.help-tip .src-link {
+  min-height: 0;
+}
+
+.src-link .inline-ico {
+  width: 15px;
+  height: 15px;
+  color: inherit;
+}
+
+/* ---------------------------------------------------------------------------------- forms (link, server) */
+
+.src-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.src-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.src-label {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--dim);
+}
+
+.src-input {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--edge);
+  background: var(--well);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  touch-action: manipulation;
+}
+
+.src-input::placeholder {
+  color: var(--faint);
+}
+
+.src-input:focus {
+  border-color: var(--text);
+}
+
+.src-hint {
+  margin: 2px 0 0;
+  color: var(--cue);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.src-error {
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(var(--warn-rgb), 0.12);
+  border: 1px solid rgba(var(--warn-rgb), 0.5);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.src-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.src-actions .src-go,
+.sb-connect {
+  flex: 1;
+  min-height: 52px;
+}
+
+.sb-connect {
+  margin-top: 10px;
+}
+
+.sb-connect[aria-busy='true'] {
+  opacity: 0.7;
+}
+
+.sb-remember {
+  margin-top: 6px;
+}
+
+.src-steps {
+  padding-left: 22px;
+}
+
+/* ------------------------------------------------------------------------------- music server browser */
+
+/* a tall sheet on phones, so switching tabs never makes it jump */
+[data-layout='pp'] .sheet[data-sheet^='server'] {
+  height: calc(var(--app-h, 100vh) - var(--safe-t) - 24px);
+}
+
+[data-layout='pl'] .sheet[data-sheet^='server'] {
+  height: calc(var(--app-h, 100vh) - var(--safe-t) - 8px);
+}
+
+[data-layout='console'] .sheet[data-sheet^='server'] {
+  width: min(560px, 100%);
+}
+
+.sb {
+  padding-top: 6px;
+}
+
+.sb-server {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 10px;
+}
+
+.sb-server-ico {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  color: var(--deck-b);
+}
+
+.sb-server-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sb-server-name {
+  font-weight: 700;
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sb-server-url {
+  color: var(--faint);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sb-off {
+  flex: none;
+  padding: 0 10px;
+}
+
+.sb-tabs {
+  display: flex;
+  width: 100%;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--well);
+  box-shadow: 0 6px 10px -6px rgba(0, 0, 0, 0.7);
+}
+
+.sb-tabs .seg-btn {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 4px;
+}
+
+.sb-tab[aria-selected='true'] {
+  background: var(--text);
+  color: var(--bg);
+}
+
+.sb-panel {
+  padding-top: 10px;
+}
+
+.sb-sort {
+  margin-bottom: 10px;
+}
+
+.sb-sort .seg-btn {
+  min-height: 36px;
+  font-size: 14px;
+}
+
+/* album grid: two columns on a phone, more where there is room */
+.sb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 14px 12px;
+  padding-bottom: 6px;
+}
+
+.sb-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0;
+  border-radius: 12px;
+  text-align: left;
+}
+
+.sb-card:active .sb-cover {
+  filter: brightness(1.15);
+}
+
+.sb-card-title {
+  margin-top: 4px;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sb-card-sub {
+  color: var(--dim);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* covers: a plain tile with an icon; the server's picture fades in over it when there is one */
+.sb-cover {
+  position: relative;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #222536, #171822);
+  border: 1px solid var(--line);
+  color: var(--faint);
+}
+
+.sb-cover.round {
+  border-radius: 50%;
+}
+
+.sb-cover.card {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+}
+
+.sb-cover.big {
+  width: 112px;
+  height: 112px;
+  border-radius: 12px;
+}
+
+.sb-cover.round.big {
+  border-radius: 50%;
+}
+
+.sb-cover-ico {
+  width: 46%;
+  height: 46%;
+  max-width: 40px;
+  max-height: 40px;
+}
+
+.sb-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.sb-cover.has-img img {
+  opacity: 1;
+}
+
+/* rows: artists and playlists */
+.sb-row {
+  width: 100%;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.sb-row:active {
+  background: var(--raised);
+}
+
+.sb-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* song rows: the main part opens the actions sheet, + adds to the queue */
+.sb-song {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 6px;
+  min-height: 60px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sb-song-main {
+  min-width: 0;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 4px 4px 2px;
+  border-radius: 10px;
+  text-align: left;
+}
+
+.sb-song-main:active {
+  background: var(--raised);
+}
+
+.sb-num {
+  flex: none;
+  width: 22px;
+  color: var(--faint);
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 15px;
+  text-align: right;
+}
+
+.sb-saved {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  margin-right: 4px;
+  vertical-align: -2px;
+  color: var(--play);
+}
+
+.sb-saved .ico {
+  width: 15px;
+  height: 15px;
+}
+
+/* album / playlist / artist page head */
+.sb-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0 10px;
+}
+
+.sb-head-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.sb-head-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.sb-head-sub {
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.sb-head-line {
+  margin: 4px 0 0;
+  color: var(--dim);
+  font-size: 13px;
+}
+
+.sb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.sb-actions:empty {
+  display: none;
+}
+
+.sb-actions .btn {
+  flex: 1 1 130px;
+}
+
+.sb-foot {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 4px;
+}
+
+.sb-foot:empty {
+  display: none;
+}
+
+.sb-more {
+  gap: 10px;
+}
+
+.sb-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 0;
+  padding: 24px 0;
+  color: var(--dim);
+}
+
+.sb-spin {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 3px solid var(--line);
+  border-top-color: var(--text);
+  animation: ts-spin 0.8s linear infinite;
+}
+
+.sb-error {
+  padding: 14px 12px;
+  margin: 6px 0;
+  border-radius: 12px;
+  background: rgba(var(--warn-rgb), 0.1);
+  border: 1px solid rgba(var(--warn-rgb), 0.45);
+}
+
+.sb-error p {
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+
+/* the line under the server: can't reach it (Try again) / the saved sign-in stopped working (Sign in again) */
+.sb-status {
+  padding: 12px;
+  margin: 0 0 10px;
+  border-radius: 12px;
+  background: rgba(var(--warn-rgb), 0.1);
+  border: 1px solid rgba(var(--warn-rgb), 0.45);
+}
+
+.sb-status p {
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+
+.sb-empty {
+  margin: 0;
+  padding: 18px 2px;
+  color: var(--dim);
+  line-height: 1.45;
+}
+
+.sb-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sb-q-ico {
+  position: absolute;
+  left: 13px;
+  width: 20px;
+  height: 20px;
+  color: var(--faint);
+  pointer-events: none;
+}
+
+.sb-q {
+  padding-left: 42px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.sb-results .songs-h {
+  margin-top: 16px;
+}
+
+.sb-noserver {
+  margin-top: 10px;
+}
+
+/* ------------------------------------------------------------------------------ badges on song rows */
+
+.src-badge {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  margin-right: 5px;
+  vertical-align: -2px;
+  color: var(--faint);
+}
+
+.src-badge .ico {
+  width: 15px;
+  height: 15px;
+}
+
+.src-badge.src-gdrive { color: #8ab4ff; }
+.src-badge.src-server { color: var(--faint); }
+.src-badge.src-server.offline { color: var(--deck-b); }
+
+.song-sheet-meta .src-ico.src-gdrive { color: #8ab4ff; }
+.song-sheet-meta .src-ico.src-server { color: var(--deck-b); }
+
+.song-saved {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.song-saved .inline-ico {
+  color: var(--play);
+}
+
+.row-load.deck-a .row-ico { color: var(--deck-a); }
+.row-load.deck-b .row-ico { color: var(--deck-b); }
+
+/* the Songs list renders a page at a time */
+.songs-more-row {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 4px;
+}
+
+.songs-more {
+  gap: 10px;
+}
+
+/* player: Add music in the empty state and next to Clear queue */
+.pq-empty-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pq-addmusic {
+  min-height: 36px;
+  padding: 0 10px;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.pq-addmusic .ico {
+  width: 18px;
+  height: 18px;
+}
+
+/* a deck chip while its song downloads from the music server */
+.chip.downloading .chip-title {
+  color: var(--dim);
+  animation: src-blink 1.4s ease-in-out infinite;
+}
+
+@keyframes src-blink {
+  50% { opacity: 0.55; }
+}
+
+/* ------------------------------------------------------------------------------------------- import bar */
+
+/* the first child of the toast stack (top of the screen): imports and offline saves with Cancel */
+.import-bar {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 10px 12px;
+  border-radius: 12px;
+  background: #1d2133;
+  border: 1px solid rgba(138, 180, 255, 0.45);
+  box-shadow: var(--shadow);
+  animation: ts-toast-in 0.18s ease-out;
+}
+
+.import-bar[data-kind='offline'] {
+  border-color: rgba(var(--deck-b-rgb), 0.5);
+}
+
+.ib-ico {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: #8ab4ff;
+}
+
+.import-bar[data-kind='offline'] .ib-ico {
+  color: var(--deck-b);
+}
+
+.ib-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ib-title {
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ib-detail {
+  color: var(--dim);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ib-detail:empty {
+  display: none;
+}
+
+.ib-track {
+  position: relative;
+  height: 4px;
+  margin-top: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--well);
+}
+
+.ib-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(var(--p, 0));
+  background: #8ab4ff;
+  transition: transform 0.2s linear;
+}
+
+.import-bar[data-kind='offline'] .ib-fill {
+  background: var(--deck-b);
+}
+
+.ib-track.indeterminate .ib-fill {
+  transform: none;
+  width: 30%;
+  animation: src-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes src-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(340%); }
+}
+
+.ib-cancel {
+  flex: none;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--raised);
+  font-family: var(--font-ui);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+
+/* -------------------------------------------------------------------------------------- outdoor contrast */
+
+:root[data-outdoor='1'] .add-opt-ico,
+:root[data-outdoor='1'] .sb-cover,
+:root[data-outdoor='1'] .src-input,
+:root[data-outdoor='1'] .import-bar {
+  border-width: 2px;
+  border-color: var(--edge);
+}
+
+:root[data-outdoor='1'] .src-link,
+:root[data-outdoor='1'] .src-badge.src-gdrive,
+:root[data-outdoor='1'] .src-badge.src-server {
+  color: var(--text);
+}
+
+/* a music-server song while no server is connected: it plays again after Connect (or once saved offline) */
+.song-row.unavailable .song-info {
+  opacity: 0.6;
+}

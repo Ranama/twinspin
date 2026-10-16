@@ -1,0 +1,974 @@
+// Song sources in the UI (docs/SOURCES.md section 4): the pure wording / reader helpers (src/ui/sources-text.js) on
+// the browser-QA fixture answers (tests/fixtures/subsonic), and the app shell on the fake DOM with the real
+// Library (memory mode), Playlist and MusicServerSource (its fetch stubbed onto the fixture files), a fake Google
+// Drive source, a fake AutoMix and a fake Player: the Add music sheet (This device, Google Drive set up or not,
+// the Drive link sheet, Other ways), Google Drive picks (the popup starts inside the tap, the import bar with
+// progress and Cancel, finished songs kept), the music server connect form (checks, plain errors, the password
+// never stored or sent), the browser (Albums / Artists / Playlists / Search, album / artist / playlist pages,
+// song actions Play now / Play next / Add to queue / Load on deck A / B / Save offline, Add all, Save offline for
+// an album), source badges on the Songs page, the deck chip and the player while a server song downloads,
+// Settings (Music server, Google Drive), Help, the menu, all four layouts, and a clean error log.
+
+import * as T from '../src/ui/sources-text.js';
+import { installFakeDom, FakeEvent, Element, FakeDocument } from './helpers/fake-dom.js';
+import { FakeEngine, FakeDeck, FakeSync } from './helpers/fake-models.js';
+import { Emitter } from '../src/core/emitter.js';
+
+const G = globalThis;
+const errors = [];
+const origError = console.error.bind(console);
+console.error = (...args) => {
+  errors.push(args.map((a) => (a && a.stack) || String(a)).join(' '));
+  origError(...args);
+};
+const realFetch = G.fetch;
+const FIXTURE = 'http://localhost:8100/tests/fixtures/subsonic';
+
+/** A fixture answer (the whole JSON document, like the server sends it). */
+async function fixture(method) {
+  const res = await realFetch(new URL(`./fixtures/subsonic/rest/${method}.view`, import.meta.url));
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Pure helpers
+
+test('where a song comes from: kind, badge, needs a download', () => {
+  assert.equal(T.remoteKind(null), null);
+  assert.equal(T.remoteKind({ source: 'file' }), null);
+  assert.equal(T.remoteKind({ source: 'gdrive' }), 'gdrive');
+  assert.equal(T.remoteKind({ remote: { kind: 'gdrive', fileId: 'x' } }), 'gdrive');
+  assert.equal(T.remoteKind({ source: 'subsonic' }), 'server');
+  assert.equal(T.needsDownload({ source: 'subsonic', stored: false }), true);
+  assert.equal(T.needsDownload({ source: 'subsonic', stored: true }), false);
+  assert.equal(T.needsDownload({ source: 'gdrive', stored: true }), false);
+  assert.equal(T.sourceBadge({ source: 'file' }), null);
+  assert.deepEqual(T.sourceBadge({ source: 'gdrive' }), { kind: 'gdrive', icon: 'cloud', label: 'From Google Drive', offline: true });
+  const b = T.sourceBadge({ remote: { kind: 'subsonic' }, stored: false });
+  assert.equal(b.icon, 'server');
+  assert.equal(b.offline, false);
+  assert.match(b.label, /downloads when you play it/);
+  assert.equal(T.sourceBadge({ source: 'subsonic', stored: true }).offline, true);
+});
+
+test('progress: event and callback shapes, bar fraction, lines', () => {
+  // a source 'progress' event counts files in total
+  assert.deepEqual(T.progressOf({ done: 1, total: 3, bytes: 2097152, totalBytes: 8388608, name: 'a.mp3' }),
+    { done: 1, total: 3, bytes: 2097152, totalBytes: 8388608, name: 'a.mp3' });
+  // onProgress(bytes, totalBytes) and a fetch-style { loaded, total }
+  assert.deepEqual(T.progressOf(500, 1000), { done: 0, total: 0, bytes: 500, totalBytes: 1000, name: '' });
+  assert.deepEqual(T.progressOf({ loaded: 5, total: 10 }), { done: 0, total: 0, bytes: 5, totalBytes: 10, name: '' });
+  assert.deepEqual(T.progressOf(NaN, -1), { done: 0, total: 0, bytes: 0, totalBytes: 0, name: '' });
+  assert.equal(T.progressFraction({ bytes: 1, totalBytes: 4, done: 0, total: 0 }), 0.25);
+  assert.equal(T.progressFraction({ bytes: 0, totalBytes: 0, done: 1, total: 2 }), 0.5);
+  assert.equal(T.progressFraction({ bytes: 9, totalBytes: 0, done: 0, total: 0 }), null, 'unknown size: indeterminate');
+  assert.equal(T.progressLine({ done: 3, total: 8, bytes: 12 * 1048576, totalBytes: 40 * 1048576 }), '3 of 8 · 12 of 40 MB');
+  assert.equal(T.progressLine({ done: 0, total: 2, bytes: 1048576, totalBytes: 4 * 1048576 }), '0 of 2 · 1.0 of 4.0 MB');
+  assert.equal(T.progressLine({ done: 0, total: 1, bytes: 1258291, totalBytes: 0 }), '1.2 MB', 'one file, no total: just the size');
+  assert.equal(T.progressLine({ done: 0, total: 0, bytes: 0, totalBytes: 0 }), '');
+  assert.equal(T.downloadText({ bytes: 128000, totalBytes: 256000 }), 'Downloading 50%');
+  assert.equal(T.downloadText({ bytes: 0, totalBytes: 0 }), 'Downloading…');
+});
+
+test('music server address hints', () => {
+  assert.equal(T.hostOf('https://Music.Example.synology.me/app/'), 'music.example.synology.me');
+  assert.equal(T.hostOf('nas.local:4533'), 'nas.local');
+  assert.equal(T.hostOf(''), '');
+  assert.equal(T.serverUrlHint(''), '');
+  assert.equal(T.serverUrlHint('music.me.synology.me'), '', 'no scheme: TwinSpin adds https://');
+  assert.equal(T.serverUrlHint('https://music.me.synology.me'), '');
+  assert.match(T.serverUrlHint('http://192.168.1.20:4533'), /only works in Chrome/);
+  assert.match(T.serverUrlHint('http://diskstation:4533'), /only works in Chrome/);
+  assert.match(T.serverUrlHint('http://music.example.com'), /block http:\/\//);
+  assert.equal(T.serverUrlHint('http://localhost:8100/tests/fixtures/subsonic', { pageHttps: false }), '', 'the app itself on http');
+  assert.match(T.serverUrlHint('ftp://nas'), /starts with https:\/\//);
+});
+
+test('other ways: the current platform first, every platform listed', () => {
+  assert.deepEqual(T.otherWays({ ios: true }).map((w) => w.id), ['iphone', 'android', 'computer']);
+  assert.deepEqual(T.otherWays({ android: true }).map((w) => w.id), ['android', 'iphone', 'computer']);
+  assert.deepEqual(T.otherWays({}).map((w) => w.id), ['computer', 'iphone', 'android']);
+  const iphone = T.otherWays({ ios: true })[0].items.join(' ');
+  assert.match(iphone, /Connect to Server > smb:\/\//);
+  assert.match(iphone, /Synology Drive app \(iOS 18 or later\)/);
+  assert.match(T.otherWays({ android: true })[0].items.join(' '), /CIFS Documents Provider/);
+});
+
+test('Subsonic readers: the fixture answers, whole or unwrapped', async () => {
+  const artistsDoc = await fixture('getArtists');
+  for (const res of [artistsDoc, artistsDoc['subsonic-response']]) {
+    const a = T.listArtists(res);
+    assert.deepEqual(a.map((x) => x.name), ['Aurora Lane', 'Kaleido Club', 'The Velvet Static']);
+    assert.equal(a[0].albumCount, 2);
+    assert.equal(a[0].coverArt, 'ar-1');
+  }
+  const albums = T.listAlbums(await fixture('getAlbumList2'));
+  assert.deepEqual(albums.map((x) => x.id), ['al-2', 'al-4', 'al-1', 'al-3']);
+  assert.equal(T.albumLine(albums[2]), 'Aurora Lane · 2025 · 4 songs');
+  assert.equal(T.albumLine(albums[2], { withArtist: false }), '2025 · 4 songs');
+  const album = T.albumOf(await fixture('getAlbum'));
+  assert.equal(album.name, 'Night Drive');
+  assert.equal(album.songs.length, 4);
+  assert.equal(album.songs[0].title, 'Midnight Signal');
+  assert.equal(album.songs[0].track, 1);
+  assert.equal(album.songs[0].raw.id, 'so-1', 'the raw song travels along (toEntries takes it)');
+  assert.equal(T.songLine(album.songs[0]), 'Aurora Lane · 124 BPM · 0:08');
+  assert.equal(T.songLine(album.songs[0], { withArtist: false }), '124 BPM · 0:08');
+  const artist = T.artistOf(await fixture('getArtist'));
+  assert.equal(artist.name, 'Aurora Lane');
+  assert.deepEqual(artist.albums.map((x) => x.name), ['Night Drive', 'Glass City']);
+  const pls = T.listPlaylists(await fixture('getPlaylists'));
+  assert.deepEqual(pls.map((p) => p.name), ['Warm-up', 'Peak time']);
+  assert.equal(T.playlistLine(pls[0]), '4 songs · 0:32');
+  const pl = T.playlistOf(await fixture('getPlaylist'));
+  assert.equal(pl.name, 'Warm-up');
+  assert.deepEqual(pl.songs.map((s) => s.id), ['so-7', 'so-6', 'so-3', 'so-5']);
+  const found = T.searchOf(await fixture('search3'));
+  assert.deepEqual([found.artists.length, found.albums.length, found.songs.length], [1, 2, 3]);
+  assert.deepEqual(T.listSongs(await fixture('getRandomSongs')).map((s) => s.id), ['so-6', 'so-2', 'so-7', 'so-4', 'so-1']);
+  // one-item lists sent as a lone object, folders skipped, nothing at all
+  assert.equal(T.listSongs({ album: { id: 'a', song: { id: 's', title: 'Solo' } } })[0].title, 'Solo');
+  assert.deepEqual(T.listSongs([{ id: 'd', isDir: true }, { id: 's2' }]).map((s) => s.title), ['Untitled']);
+  assert.deepEqual(T.listAlbums(null), []);
+  assert.deepEqual(T.searchOf({}), { artists: [], albums: [], songs: [] });
+  assert.deepEqual(T.pageOf([1, 2, 3, 4, 5], 2), { items: [1, 2], left: 3 });
+  assert.deepEqual(T.pageOf([1, 2], 60), { items: [1, 2], left: 0 });
+  assert.equal(T.countWord(1, 'song'), '1 song');
+  assert.equal(T.serverLabel({ name: '', url: 'https://music.me.synology.me' }), 'music.me.synology.me');
+  // `version` is the Subsonic API version; the server's own version is OpenSubsonic's serverVersion
+  assert.equal(T.serverKind({ type: 'navidrome', version: '1.16.1', serverVersion: '0.64.2 (5f3a1c2)' }), 'Navidrome 0.64.2');
+  assert.equal(T.serverKind({ type: 'navidrome', version: '1.16.1' }), 'Navidrome');
+  assert.equal(T.serverKind({ type: '', version: '1.16.1' }), 'Subsonic API 1.16.1');
+  assert.equal(T.serverKind({}), '');
+});
+
+test('errors in plain words, cancels recognised', () => {
+  const fb = 'Fallback words.';
+  assert.equal(T.errText(new Error('Wrong user name or password.'), fb), 'Wrong user name or password.');
+  assert.equal(T.errText(new TypeError('Failed to fetch'), fb), fb);
+  assert.equal(T.errText(new Error('Load failed'), fb), fb);
+  assert.equal(T.errText(new Error("Cannot read properties of undefined (reading 'x')"), fb), fb);
+  assert.equal(T.errText(null, fb), fb);
+  assert.equal(T.errText('Plain string.', fb), 'Plain string.');
+  const abort = new Error('The operation was aborted.');
+  abort.name = 'AbortError';
+  assert.equal(T.isAbort(abort), true);
+  assert.equal(T.isAbort(new Error('x')), false);
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// The app shell
+
+installFakeDom();
+const { Settings } = await import('../src/core/settings.js');
+const { Playlist } = await import('../src/deck/playlist.js');
+const { Library } = await import('../src/library/library.js');
+const { MusicServerSource } = await import('../src/sources/subsonic.js');
+const { AppUI } = await import('../src/ui/app-ui.js');
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const $$ = (root, sel) => root.querySelectorAll(sel);
+const $ = (root, sel) => root.querySelector(sel);
+const textOf = (el) => (el ? el.textContent : '');
+const toastsOf = (app) => $$(app.root, '.toast').map(textOf).join(' | ');
+const sheetOf = (app) => $(app.root, '.sheet');
+const rowByLabel = (root, label) => $$(root, '.row').find((r) => textOf($(r, '.row-label')) === label) || null;
+const buttonByText = (root, text) => $$(root, 'button').find((b) => textOf(b).trim() === text) || null;
+
+let fileSeq = 0;
+/** A File look-alike the real Library can read (tags fall back to the name). */
+function fakeFile(name, extra = {}) {
+  const size = 4000 + ++fileSeq;
+  const bytes = new Uint8Array(64);
+  return {
+    name, size, lastModified: 1700000000000, type: 'audio/mpeg',
+    arrayBuffer: async () => bytes.buffer.slice(0),
+    slice: () => ({ arrayBuffer: async () => bytes.buffer.slice(0) }),
+    ...extra,
+  };
+}
+
+/** Storage look-alike (the source keeps its sign-in here). */
+function memStore() {
+  const m = new Map();
+  return {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, String(v)),
+    removeItem: (k) => m.delete(k),
+    dump: () => [...m.values()].join('\n'),
+  };
+}
+
+/** fetch for the fixture server: http://localhost:8100/tests/fixtures/subsonic/rest/<method>.view?... */
+function fixtureFetch(log, { fail = false } = {}) {
+  return (url, init = {}) => {
+    const u = String(url);
+    log.push(u);
+    if (fail) return Promise.reject(new TypeError('Failed to fetch'));
+    const m = /\/rest\/([A-Za-z0-9]+)\.view(\?|$)/.exec(u);
+    if (!u.startsWith(`${FIXTURE}/rest/`) || !m) return Promise.reject(new TypeError('Failed to fetch'));
+    if (init.mode === 'no-cors') return Promise.resolve({ ok: false, status: 0, type: 'opaque' });
+    return realFetch(new URL(`./fixtures/subsonic/rest/${m[1]}.view`, import.meta.url));
+  };
+}
+
+/** A Subsonic answer that says "wrong password". */
+function failingAuthFetch(log) {
+  return (url) => {
+    log.push(String(url));
+    const body = { 'subsonic-response': { status: 'failed', version: '1.16.1', error: { code: 40, message: 'Wrong username or password' } } };
+    return Promise.resolve({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => body });
+  };
+}
+
+/** docs/SOURCES.md 3.1 GoogleDriveSource, controlled by the test. */
+class FakeDrive extends Emitter {
+  constructor({ configured = true, linkReady = configured } = {}) {
+    super();
+    this._configured = configured;
+    this.linkReady = linkReady;
+    this.ready = false;
+    this.stayLoading = false;
+    this.loading = false;
+    this.loadError = '';
+    this.calls = [];
+    this.pending = null;
+  }
+
+  get configured() {
+    return this._configured;
+  }
+
+  count(name) {
+    return this.calls.filter((c) => c[0] === name).length;
+  }
+
+  preload() {
+    this.calls.push(['preload']);
+    if (this.stayLoading) {
+      this.loading = true;
+    } else {
+      this.ready = true;
+    }
+    this.emit('state');
+    return Promise.resolve();
+  }
+
+  _wait(name, ...args) {
+    this.calls.push([name, ...args]);
+    return new Promise((resolve, reject) => {
+      this.pending = { resolve, reject, args };
+    });
+  }
+
+  pick(opts) {
+    return this._wait('pick', opts);
+  }
+
+  importLink(url, opts) {
+    return this._wait('importLink', url, opts);
+  }
+
+  cancel() {
+    this.calls.push(['cancel']);
+  }
+
+  signOut() {
+    this.calls.push(['signOut']);
+    this.emit('state');
+  }
+}
+
+class FakeAutoMix extends Emitter {
+  constructor(playlist) {
+    super();
+    this.playlist = playlist;
+    this.enabled = false;
+    this.state = 'off';
+    this.currentDeck = null;
+    this.nextItem = null;
+    this.pendingItem = null;
+    this.currentItem = null;
+    this.nextReady = false;
+    this.paused = false;
+  }
+
+  setEnabled(on) {
+    this.enabled = !!on;
+    this.emit('change', 'enabled');
+  }
+
+  toggle() {
+    this.setEnabled(!this.enabled);
+  }
+
+  mixNow() {}
+
+  noteUserCrossfader() {}
+}
+
+/** The docs/PLAYER.md section 4 surface the UI uses, recording the queue calls. */
+class FakePlayer extends Emitter {
+  constructor({ playlist, automix }) {
+    super();
+    this.playlist = playlist;
+    this.automix = automix;
+    this.state = 'stopped';
+    this.calls = [];
+    this.position = 0;
+    this.duration = 0;
+    this.upNext = [];
+    this.history = [];
+    this.shuffle = false;
+    this.repeat = 'off';
+    this.transition = 'dj';
+    this.crossfadeSec = 6;
+  }
+
+  get nowPlaying() {
+    const it = this.playlist.items[0];
+    return it ? { item: it, deckIndex: null, title: it.title, artist: it.artist, bpm: it.bpm || null, hue: 200 } : null;
+  }
+
+  count(name) {
+    return this.calls.filter((c) => c[0] === name).length;
+  }
+
+  playNow(entry) {
+    this.calls.push(['playNow', entry]);
+    return this.playlist.add(entry, { at: 0 });
+  }
+
+  playNext(entry) {
+    this.calls.push(['playNext', entry]);
+    return this.playlist.add(entry, { at: 0 });
+  }
+
+  addToQueue(entry) {
+    this.calls.push(['addToQueue', entry]);
+    return this.playlist.add(entry);
+  }
+}
+
+function makeApp(w, h, { drive = null, server = 'fixture', fetchLog = [], fetchFn = null } = {}) {
+  G.innerWidth = w;
+  G.innerHeight = h;
+  G.document = new FakeDocument();
+  const root = new Element('div');
+  root.setAttribute('id', 'app');
+  G.document.body.append(root);
+  const settings = new Settings(`ui-sources-${w}x${h}-${Math.random()}`);
+  settings.set('tipsSeen', true);
+  const engine = new FakeEngine();
+  const decks = [new FakeDeck('A'), new FakeDeck('B')];
+  const sync = new FakeSync(decks);
+  const library = new Library({ indexedDB: null, storage: null });
+  const playlist = new Playlist({ settings, library });
+  const automix = new FakeAutoMix(playlist);
+  const player = new FakePlayer({ playlist, automix });
+  const local = memStore();
+  const session = memStore();
+  const srv = server === 'fixture'
+    ? new MusicServerSource({ settings, library, fetch: fetchFn || fixtureFetch(fetchLog), local, session, location: { protocol: 'http:' } })
+    : server;
+  const ui = new AppUI({ root, engine, decks, sync, settings, library, playlist, automix, player,
+    sources: { gdrive: drive, server: srv } });
+  library.init();
+  return { root, settings, engine, decks, sync, library, playlist, automix, player, ui, drive, server: srv, fetchLog, local, session };
+}
+
+async function startAudio(app) {
+  $(app.root, '.btn-start').click();
+  await sleep(50);
+  assert.equal(app.ui.audioOn, true);
+}
+
+function type(input, value) {
+  input.value = value;
+  input.dispatchEvent(new FakeEvent('input'));
+}
+
+function submit(form) {
+  form.dispatchEvent(new FakeEvent('submit'));
+}
+
+/** Fill in and send the connect form of the open server sheet. */
+async function connect(app, { url = FIXTURE, user = 'dj', pass = 'secret-pw', remember = false } = {}) {
+  const sheet = sheetOf(app);
+  type($(sheet, '[id=sb-url]'), url);
+  type($(sheet, '[id=sb-user]'), user);
+  type($(sheet, '[id=sb-pass]'), pass);
+  if (remember) $(sheet, '.sb-remember').click();
+  submit($(sheet, '.sb-form'));
+  await sleep(120);
+}
+
+test('Add music sheet: four ways in, Other ways, This device adds through the file input', async () => {
+  const app = makeApp(360, 560, { drive: new FakeDrive({ configured: false }) });
+  await startAudio(app);
+  $(app.root, '.tab-songs').click();
+  await sleep(20);
+  const add = $(app.root, '.btn-add');
+  assert.equal(add.tagName, 'BUTTON');
+  assert.equal(add.getAttribute('aria-haspopup'), 'dialog');
+  add.click();
+  const sheet = sheetOf(app);
+  assert.equal(sheet.dataset.sheet, 'add-music');
+  assert.equal(textOf($(sheet, '.sheet-title')), 'Add music');
+  assert.deepEqual($$(sheet, '.add-opt .row-label').map(textOf),
+    ['This device', 'Google Drive', 'Music server / NAS', 'Paste a Google Drive link']);
+  assert.equal($(sheet, '.add-device').tagName, 'LABEL', 'the system picker opens in the same tap');
+  // Other ways: Android first on this (Android) phone, the guides linked
+  const ways = $$(sheet, '.add-way');
+  assert.deepEqual(ways.map((w) => w.dataset.way), ['android', 'iphone', 'computer']);
+  assert($$(sheet, '.add-guides a').every((a) => /^https:\/\/github\.com\/Ranama\/twinspin\/blob\/main\/docs\//.test(a.getAttribute('href'))));
+  assert.equal($(sheet, '.add-privacy a').getAttribute('href'), 'privacy.html');
+  // Google Drive not set up: an explanation and the guide, no popup, no Google scripts
+  const drive = $(sheet, '.add-drive');
+  assert.match(textOf($(drive, '.row-detail')), /one-time setup/);
+  assert.equal($(sheet, '.add-explain').hidden, true);
+  drive.click();
+  assert.equal($(sheet, '.add-explain').hidden, false);
+  assert.equal(drive.getAttribute('aria-expanded'), 'true');
+  assert.match(textOf($(sheet, '.add-explain')), /three public values/);
+  assert.equal(app.drive.count('pick'), 0);
+  assert.equal(app.drive.count('preload'), 0, 'nothing loads from Google until Drive is set up');
+  // This device: the files go to the library and the set list; the sheet closes
+  const input = $(sheet, '.add-device input');
+  input.files = [fakeFile('Local Song.mp3')];
+  input.dispatchEvent(new FakeEvent('change'));
+  await sleep(60);
+  assert.equal($(app.root, '.sheet-layer').hidden, true);
+  assert.equal(app.library.list().filter((e) => !e.demo).length, 1);
+  assert.equal(app.playlist.items.length, 1);
+  assert.match(toastsOf(app), /Added “Local Song”/);
+  app.ui.destroy();
+});
+
+test('Google Drive: the popup starts inside the tap, progress with Cancel, finished songs kept', async () => {
+  const drive = new FakeDrive();
+  const app = makeApp(360, 560, { drive });
+  await startAudio(app);
+  // Google's scripts still loading: the tap cannot open the popup yet, the sheet stays and says so
+  drive.stayLoading = true;
+  app.ui.openAddMusic();
+  assert.equal(drive.count('preload'), 1, 'Google scripts load when the sheet opens');
+  assert.match(textOf($(sheetOf(app), '.add-drive .row-detail')), /Getting Google Drive ready/);
+  $(sheetOf(app), '.add-drive').click();
+  assert.equal(drive.count('pick'), 0);
+  assert.equal(sheetOf(app).dataset.sheet, 'add-music');
+  assert.match(toastsOf(app), /getting ready/);
+  app.ui.sheets.close();
+  drive.stayLoading = false;
+  drive.loading = false;
+  app.ui.openAddMusic();
+  assert.equal(drive.count('preload'), 2, 'opening the sheet again retries');
+  assert.equal(drive.ready, true);
+  let sheet = sheetOf(app);
+  assert.match(textOf($(sheet, '.add-drive .row-detail')), /only sees the songs you pick/);
+  $(sheet, '.add-drive').click();
+  assert.equal(drive.count('pick'), 1, 'pick() runs synchronously in the click');
+  assert.equal($(app.root, '.sheet-layer').hidden, true, 'the sheet makes way for Google’s picker');
+  const bar = $(app.root, '.import-bar');
+  assert.equal(bar.hidden, true, 'no bar while the user is still picking');
+  drive.emit('progress', { done: 0, total: 2, bytes: 1048576, totalBytes: 4 * 1048576, name: 'One.mp3' });
+  await sleep(40);
+  assert.equal(bar.hidden, false);
+  assert.equal(bar.parentNode, $(app.root, '.toasts'), 'the bar sits on top of the toast stack');
+  assert.equal(textOf($(bar, '.ib-title')), 'Importing from Google Drive');
+  assert.equal(textOf($(bar, '.ib-detail')), '0 of 2 · 1.0 of 4.0 MB');
+  assert.equal($(bar, '.ib-track').getAttribute('aria-valuenow'), '25');
+  // a second Drive tap while importing explains instead of opening another picker
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-drive').click();
+  assert.equal(drive.count('pick'), 1);
+  assert.match(toastsOf(app), /still running/);
+  app.ui.sheets.close();
+  // done: the songs land in the library with their Drive id, the set list and an empty deck
+  drive.pending.resolve([fakeFile('Drive One.mp3', { remote: { kind: 'gdrive', fileId: 'fileOne123456' } }),
+    fakeFile('Drive Two.mp3', { driveFileId: 'fileTwo123456' })]);
+  await sleep(80);
+  assert.equal(bar.hidden, true);
+  const songs = app.library.list().filter((e) => !e.demo);
+  assert.deepEqual(songs.map((e) => e.source).sort(), ['gdrive', 'gdrive']);
+  assert.deepEqual(songs.map((e) => e.remote.fileId).sort(), ['fileOne123456', 'fileTwo123456']);
+  assert.equal(app.playlist.items.length, 2);
+  assert.equal(app.decks[0].count('loadFile'), 1, 'the first song loads on the empty deck A');
+  assert.match(toastsOf(app), /Added 2 songs to your songs and the set list/);
+  // the Songs list marks them with the cloud badge
+  app.ui.setPage('songs');
+  await sleep(20);
+  const badges = $$(app.root, '.songs .song-row .src-badge.src-gdrive');
+  assert.equal(badges.length, 2);
+  // Cancel: the bar goes at once, the source is told, the songs that finished are kept
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-drive').click();
+  assert.equal(drive.count('pick'), 2);
+  const signal = drive.pending.args[0].signal;
+  drive.emit('progress', { done: 1, total: 3, bytes: 3e6, totalBytes: 9e6, name: 'x.mp3' });
+  await sleep(40);
+  $(bar, '.ib-cancel').click();
+  assert.equal(bar.hidden, true);
+  assert.equal(drive.count('cancel'), 1);
+  assert.equal(signal.aborted, true);
+  assert.match(toastsOf(app), /Import cancelled/);
+  drive.pending.resolve([fakeFile('Drive Three.mp3', { remote: { kind: 'gdrive', fileId: 'fileThree1234' } })]);
+  await sleep(60);
+  assert.equal(app.library.list().filter((e) => !e.demo).length, 3, 'the finished song is kept');
+  // Google's sign-in window never answered (seen in iPhone Home Screen apps): a new tap asks again
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-drive').click();
+  const stuck = drive.pending;
+  const picks = drive.count('pick');
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-drive').click();
+  assert.equal(drive.count('pick'), picks + 1, 'no "still running" while nothing shows yet');
+  stuck.resolve([]); // the source drops the earlier pick
+  await sleep(20);
+  drive.emit('progress', { done: 0, total: 1, bytes: 10, totalBytes: 100, name: 'y.mp3' });
+  await sleep(40);
+  assert.equal(bar.hidden, false, 'the new pick owns the bar');
+  drive.pending.resolve([]);
+  await sleep(40);
+  assert.equal(bar.hidden, true);
+  // a failure says why in plain words
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-drive').click();
+  drive.pending.reject(Object.assign(new Error('Allow pop-ups for TwinSpin, or use Add music > Google Drive in your phone’s file picker.'), { code: 'popup-blocked' }));
+  await sleep(40);
+  assert.match(toastsOf(app), /Allow pop-ups for TwinSpin/);
+  // a raw browser error becomes a plain sentence
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-drive').click();
+  drive.pending.reject(new TypeError('Failed to fetch'));
+  await sleep(40);
+  assert.match(toastsOf(app), /Google Drive didn't answer/);
+  sheet = null;
+  app.ui.destroy();
+});
+
+test('Drive link sheet: checks the link, imports with the bar, explains without the key', async () => {
+  const drive = new FakeDrive();
+  const app = makeApp(360, 560, { drive });
+  await startAudio(app);
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-link').click();
+  let sheet = sheetOf(app);
+  assert.equal(sheet.dataset.sheet, 'drive-link');
+  assert.equal($(sheet, '.sheet-back').hidden, false, 'Back returns to Add music');
+  const input = $(sheet, '[id=drive-link-input]');
+  assert.equal(input.getAttribute('type'), 'url');
+  assert.equal(input.getAttribute('autocapitalize'), 'none');
+  const form = $(sheet, '.src-form');
+  const err = $(sheet, '.src-error');
+  submit(form);
+  assert.equal(err.hidden, false);
+  assert.equal(textOf(err), 'Paste the link first.');
+  type(input, 'https://example.com/song.mp3');
+  assert.equal(err.hidden, true, 'typing clears the error');
+  submit(form);
+  assert.match(textOf(err), /not a Google Drive link/);
+  assert.equal(drive.count('importLink'), 0);
+  const link = 'https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUv?usp=sharing';
+  type(input, link);
+  submit(form);
+  assert.equal(drive.count('importLink'), 1);
+  assert.equal(drive.calls.find((c) => c[0] === 'importLink')[1], link);
+  assert.equal($(app.root, '.sheet-layer').hidden, true);
+  const bar = $(app.root, '.import-bar');
+  await sleep(40);
+  assert.equal(bar.hidden, false, 'a link import shows the bar at once');
+  assert.equal(textOf($(bar, '.ib-title')), 'Importing a Google Drive link');
+  assert.equal(textOf($(bar, '.ib-detail')), 'Looking in the folder…');
+  assert($(bar, '.ib-track').classList.contains('indeterminate'));
+  drive.pending.resolve([]);
+  await sleep(40);
+  assert.equal(bar.hidden, true);
+  assert.match(toastsOf(app), /No songs found behind that link/);
+  app.ui.destroy();
+  // no API key: the sheet explains and links the guide
+  const app2 = makeApp(360, 560, { drive: new FakeDrive({ configured: false }) });
+  await startAudio(app2);
+  app2.ui.openAddMusic();
+  $(sheetOf(app2), '.add-link').click();
+  sheet = sheetOf(app2);
+  assert(!$(sheet, '.src-form'));
+  assert.match(textOf(sheet), /needs the one-time Google setup/);
+  assert.match($(sheet, '.src-link').getAttribute('href'), /GOOGLE_DRIVE\.md$/);
+  app2.ui.destroy();
+});
+
+test('music server: connect form checks, plain errors, the password is never stored or sent', async () => {
+  const log = [];
+  const app = makeApp(360, 560, { fetchLog: log, fetchFn: failingAuthFetch(log) });
+  await startAudio(app);
+  app.ui.openAddMusic();
+  assert.match(textOf($(sheetOf(app), '.add-server .row-detail')), /Navidrome or another Subsonic server/);
+  $(sheetOf(app), '.add-server').click();
+  const sheet = sheetOf(app);
+  assert.equal(sheet.dataset.sheet, 'server');
+  assert.equal($(sheet, '[id=sb-pass]').getAttribute('type'), 'password');
+  assert.equal($(sheet, '[id=sb-pass]').getAttribute('autocomplete'), 'current-password');
+  assert.equal($(sheet, '[id=sb-user]').getAttribute('autocomplete'), 'username');
+  assert.equal($(sheet, '.sb-remember').getAttribute('aria-checked'), 'false', 'remembering is opt-in');
+  assert.match($(sheet, '.src-link').getAttribute('href'), /SYNOLOGY\.md$/);
+  const err = $(sheet, '.src-error');
+  submit($(sheet, '.sb-form'));
+  assert.equal(textOf(err), 'Type the address of your music server.');
+  type($(sheet, '[id=sb-url]'), FIXTURE);
+  submit($(sheet, '.sb-form'));
+  assert.equal(textOf(err), 'Type your user name.');
+  type($(sheet, '[id=sb-user]'), 'dj');
+  submit($(sheet, '.sb-form'));
+  assert.equal(textOf(err), 'Type your password.');
+  assert.equal(log.length, 0, 'nothing sent before the form is complete');
+  // an http:// address while the app runs on https would get a hint (here the app runs on http, like the dev server)
+  // wrong password: the server's answer in plain words, inline
+  type($(sheet, '[id=sb-pass]'), 'wrong-pw');
+  submit($(sheet, '.sb-form'));
+  assert.equal(textOf($(sheet, '.sb-connect')), 'Connecting…');
+  await sleep(80);
+  assert.equal(textOf(err), 'Wrong user name or password.');
+  assert.equal(err.hidden, false);
+  assert.equal(textOf($(sheet, '.sb-connect')), 'Connect');
+  assert.equal(app.server.connected, false);
+  assert(log.length >= 1);
+  assert(log.every((u) => !u.includes('wrong-pw') && !/[?&]p=/.test(u)), 'the password never goes into a URL');
+  assert.equal(app.local.dump() + app.session.dump(), '', 'nothing stored after a failed sign-in');
+  assert(!/connected to/i.test(toastsOf(app)));
+  app.ui.destroy();
+  // an unreachable server
+  const log2 = [];
+  const app2 = makeApp(360, 560, { fetchLog: log2, fetchFn: fixtureFetch(log2, { fail: true }) });
+  await startAudio(app2);
+  app2.ui.openMusicServer();
+  await connect(app2);
+  assert.match(textOf($(sheetOf(app2), '.src-error')), /Can't reach your music server/);
+  app2.ui.destroy();
+});
+
+test('music server browser on the fixture: albums, album page, song actions, Add all, Save offline', async () => {
+  const log = [];
+  const app = makeApp(360, 560, { fetchLog: log });
+  const { player, playlist, library, decks } = app;
+  await startAudio(app);
+  app.ui.openMusicServer();
+  await connect(app, { remember: false });
+  assert.equal(app.server.connected, true);
+  assert.match(toastsOf(app), /Connected to localhost/);
+  assert(log.some((u) => u.includes('/rest/ping.view?') && u.includes('u=dj') && /[?&]t=[0-9a-f]{32}/.test(u) && /[?&]s=/.test(u)));
+  assert(log.every((u) => !u.includes('secret-pw')), 'the password never goes into a URL');
+  assert(!app.local.dump().includes('secret-pw') && !app.session.dump().includes('secret-pw'), 'never stored');
+  assert.equal(app.local.dump(), '', 'not remembered: nothing in localStorage');
+  assert(app.session.dump().includes('"token"'), 'a sign-in key for this visit only');
+  let sheet = sheetOf(app);
+  assert.equal($(sheet, '[id=sb-pass]'), null, 'the form is gone');
+  assert.equal(textOf($(sheet, '.sb-server-name')), 'localhost');
+  assert.match(textOf($(sheet, '.sb-server-url')), /Navidrome 0\.64\.2 · http:\/\/localhost:8100\/tests\/fixtures\/subsonic/);
+  const tabs = $$(sheet, '.sb-tab');
+  assert.deepEqual(tabs.map(textOf), ['Artists', 'Albums', 'Playlists', 'Search']);
+  assert.equal(tabs[1].getAttribute('aria-selected'), 'true', 'Albums first');
+  await sleep(60);
+  let cards = $$(sheet, '.sb-card');
+  assert.deepEqual(cards.map((c) => textOf($(c, '.sb-card-title'))), ['Glass City', 'Low Light', 'Night Drive', 'Prism Loops']);
+  const img = $(cards[0], 'img');
+  assert.match(img.getAttribute('src'), /\/rest\/getCoverArt\.view\?.*id=al-2/);
+  assert.equal(img.getAttribute('loading'), 'lazy');
+  assert.equal($(sheet, '.sb-more'), null, 'a short page is the last one');
+  // the album page (pushed: Back returns to the albums)
+  cards[2].click();
+  await sleep(60);
+  sheet = sheetOf(app);
+  assert.equal(sheet.dataset.sheet, 'server-album');
+  assert.equal(textOf($(sheet, '.sheet-title')), 'Night Drive');
+  assert.equal($(sheet, '.sheet-back').hidden, false);
+  assert.equal(textOf($(sheet, '.sb-head-title')), 'Night Drive');
+  assert.equal(textOf($(sheet, '.sb-head-line')), '2025 · 4 songs');
+  let rows = $$(sheet, '.sb-song');
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows.map((r) => textOf($(r, '.sb-num'))), ['1', '2', '3', '4']);
+  assert.equal(textOf($(rows[0], '.song-title')), 'Midnight Signal');
+  assert.equal(library.list().filter((e) => !e.demo).length, 0, 'browsing adds nothing to the library');
+  // a song: the action sheet with the deck loads and Save offline
+  $(rows[0], '.sb-song-main').click();
+  sheet = sheetOf(app);
+  assert.equal(sheet.dataset.sheet, 'song');
+  assert.deepEqual($$(sheet, '.row-label').map(textOf),
+    ['Play now', 'Play next', 'Add to queue', 'Load on deck A', 'Load on deck B', 'Save offline']);
+  // Add to queue: back to the album
+  rowByLabel(sheet, 'Add to queue').click();
+  await sleep(60);
+  assert.equal(sheetOf(app).dataset.sheet, 'server-album', 'queueing keeps the album open');
+  assert.equal(player.count('addToQueue'), 1);
+  const entry = player.calls[0][1];
+  assert.equal(entry.source, 'subsonic');
+  assert.equal(entry.stored, false);
+  assert.equal(entry.remote.songId, 'so-1');
+  assert.equal(library.list().filter((e) => !e.demo).length, 1, 'the song is listed once it is used');
+  assert.match(toastsOf(app), /Added “Midnight Signal” to the queue/);
+  // + on a row: Add to queue
+  rows = $$(sheetOf(app), '.sb-song');
+  $(rows[1], '.sb-add').click();
+  await sleep(60);
+  assert.equal(player.count('addToQueue'), 2);
+  // Play now closes the sheets
+  $(rows[2], '.sb-song-main').click();
+  rowByLabel(sheetOf(app), 'Play now').click();
+  await sleep(60);
+  assert.equal($(app.root, '.sheet-layer').hidden, true);
+  assert.equal(player.count('playNow'), 1);
+  assert.equal(player.calls.find((c) => c[0] === 'playNow')[1].title, 'Tail Lights');
+  // Load on deck A: downloads (the fixture WAV), then loads with the library id
+  app.ui.openMusicServer();
+  await sleep(40);
+  $$(sheetOf(app), '.sb-card')[2].click();
+  await sleep(40);
+  $($$(sheetOf(app), '.sb-song')[3], '.sb-song-main').click();
+  rowByLabel(sheetOf(app), 'Load on deck A').click();
+  await sleep(200);
+  assert.equal(decks[0].count('loadFile'), 1);
+  const [, blob, meta] = decks[0].calls.find((c) => c[0] === 'loadFile');
+  assert.equal(meta.title, 'Last Exit');
+  assert.equal(blob.size, 256044, 'the original file from download.view');
+  assert(log.some((u) => /\/rest\/download\.view\?.*id=so-4/.test(u)));
+  assert.equal(textOf($(app.root, '.chip-a .chip-title')), 'Last Exit');
+  // Add all + Save offline for the album
+  app.ui.openMusicServer();
+  await sleep(40);
+  $$(sheetOf(app), '.sb-card')[2].click();
+  await sleep(40);
+  sheet = sheetOf(app);
+  const before = playlist.items.length;
+  $(sheet, '.sb-addall').click();
+  await sleep(60);
+  assert.equal(playlist.items.length, before + 4);
+  assert.match(toastsOf(app), /Added 4 songs to the queue/);
+  $(sheet, '.sb-saveall').click();
+  await sleep(40);
+  const bar = $(app.root, '.import-bar');
+  assert.equal(bar.dataset.kind, 'offline');
+  await sleep(400);
+  assert.equal(bar.hidden, true);
+  const listed = library.list().filter((e) => e.source === 'subsonic');
+  assert.equal(listed.length, 4);
+  assert(listed.every((e) => e.stored === true), 'all four saved on this device');
+  assert.match(toastsOf(app), /Saved 4 songs on this device/);
+  await sleep(40);
+  rows = $$(sheetOf(app), '.sb-song');
+  assert(rows.every((r) => $(r, '.sb-saved').hidden === false), 'saved marks on the rows');
+  $(rows[0], '.sb-song-main').click();
+  assert.equal(rowByLabel(sheetOf(app), 'Save offline'), null);
+  assert.match(textOf($(sheetOf(app), '.song-saved')), /Saved on this device/);
+  app.ui.sheets.close();
+  // the Songs page: server badges (saved: the filled one), Remove keeps the server copy
+  app.ui.setPage('songs');
+  await sleep(30);
+  const serverRows = $$(app.root, '.songs .song-row').filter((r) => $(r, '.src-badge.src-server'));
+  assert.equal(serverRows.length, 4);
+  assert(serverRows.every((r) => $(r, '.src-badge').classList.contains('offline')));
+  app.ui.destroy();
+});
+
+test('music server browser: artists, playlists, search; Settings shows the server and disconnects', async () => {
+  const log = [];
+  const app = makeApp(360, 560, { fetchLog: log });
+  await startAudio(app);
+  app.ui.openMusicServer();
+  await connect(app, { remember: true });
+  assert(app.local.dump().includes('"token"'), 'remembered: the sign-in key (never the password) on this device');
+  let sheet = sheetOf(app);
+  // Artists
+  buttonByText(sheet, 'Artists').click();
+  await sleep(60);
+  const artists = $$(sheet, '.sb-artist');
+  assert.deepEqual(artists.map((a) => textOf($(a, '.song-title'))), ['Aurora Lane', 'Kaleido Club', 'The Velvet Static']);
+  assert.equal(textOf($(artists[0], '.song-meta')), '2 albums');
+  artists[0].click();
+  await sleep(60);
+  sheet = sheetOf(app);
+  assert.equal(sheet.dataset.sheet, 'server-artist');
+  assert.deepEqual($$(sheet, '.sb-card-title').map(textOf), ['Night Drive', 'Glass City']);
+  $(sheet, '.sheet-back').click();
+  await sleep(40);
+  sheet = sheetOf(app);
+  assert.equal(sheet.dataset.sheet, 'server');
+  assert.equal($$(sheet, '.sb-tab').find((t) => t.getAttribute('aria-selected') === 'true').dataset.tab, 'artists', 'the tab is kept');
+  // Playlists
+  buttonByText(sheet, 'Playlists').click();
+  await sleep(60);
+  const pls = $$(sheet, '.sb-pl');
+  assert.deepEqual(pls.map((p) => textOf($(p, '.song-title'))), ['Warm-up', 'Peak time']);
+  assert.equal(textOf($(pls[0], '.song-meta')), '4 songs · 0:32');
+  pls[0].click();
+  await sleep(60);
+  sheet = sheetOf(app);
+  assert.equal(sheet.dataset.sheet, 'server-playlist');
+  assert.equal($$(sheet, '.sb-song').length, 4);
+  assert.equal(textOf($(sheet, '.sb-head-sub')), 'By twinspin');
+  $(sheet, '.sb-addall').click();
+  await sleep(60);
+  assert.equal(app.playlist.items.length, 4);
+  $(sheet, '.sheet-back').click();
+  await sleep(30);
+  // Search: waits for a pause in typing, then shows songs, albums and artists
+  sheet = sheetOf(app);
+  buttonByText(sheet, 'Search').click();
+  await sleep(20);
+  const q = $(sheet, '.sb-q');
+  assert.equal(q.getAttribute('type'), 'search');
+  assert.match(textOf($(sheet, '.sb-results')), /Search your server/);
+  type(q, 'n');
+  await sleep(450);
+  assert.match(textOf($(sheet, '.sb-results')), /one more letter/);
+  assert(!log.some((u) => u.includes('search3')), 'one letter waits for Search');
+  type(q, 'night');
+  await sleep(200);
+  assert(!log.some((u) => u.includes('search3')), 'no search while typing');
+  await sleep(300);
+  assert(log.some((u) => /search3\.view\?.*query=night/.test(u)));
+  const res = $(sheet, '.sb-results');
+  assert.deepEqual($$(res, '.songs-h').map((x) => textOf(x.children[0])), ['Songs', 'Albums', 'Artists']);
+  assert.equal($$(res, '.sb-song').length, 3);
+  assert.equal($$(res, '.sb-card').length, 2);
+  // Settings: the server, and Disconnect (asks first)
+  app.ui.sheets.close();
+  app.ui.openMenu();
+  rowByLabel(sheetOf(app), 'Settings').click();
+  sheet = sheetOf(app);
+  const secs = $$(sheet, '.sheet-sec').filter((s) => textOf($(s, '.sheet-h')) === 'Music server');
+  assert.equal(secs.length, 1);
+  assert.match(textOf(secs[0]), /localhost/);
+  assert.match(textOf(secs[0]), /Navidrome 0\.64\.2/, 'the server product version, not the API version');
+  // Diagnostics: the kind of server and its status, never its address or the user
+  const diag = app.ui.diagnostics();
+  assert.equal(diag.sources.server, 'Navidrome 0.64.2 (connected)');
+  const flat = JSON.stringify(diag.sources);
+  assert(!/localhost|\bdj\b|token|salt/.test(flat), `no address or sign-in details: ${flat}`);
+  rowByLabel(secs[0], 'Disconnect').click();
+  await sleep(10);
+  const dlg = $(app.root, '.dialog-layer');
+  assert.match(textOf(dlg), /Disconnect the music server\?/);
+  buttonByText(dlg, 'Disconnect').click();
+  await sleep(40);
+  assert.equal(app.server.connected, false);
+  assert.equal(app.local.dump(), '', 'the sign-in key is forgotten');
+  assert.equal(globalThis.localStorage.getItem('twinspin.serverForm'), null, 'the address and user name are not kept');
+  assert.match(String(globalThis.sessionStorage.getItem('twinspin.serverForm')), /fixtures\/subsonic/,
+    'this visit still fills in the form');
+  assert.match(toastsOf(app), /Music server disconnected/);
+  const secs2 = $$(sheetOf(app), '.sheet-sec').filter((s) => textOf($(s, '.sheet-h')) === 'Music server');
+  assert(rowByLabel(secs2[0], 'Connect a music server'), 'the section offers to connect again');
+  app.ui.destroy();
+});
+
+test('a server song downloading for a deck and for the player shows its progress', async () => {
+  const app = makeApp(360, 560, { server: null });
+  const { library, decks } = app;
+  await startAudio(app);
+  let release = null;
+  let progress = null;
+  library.setResolver('subsonic', (entry, { onProgress }) => new Promise((resolve) => {
+    progress = onProgress;
+    release = () => resolve({ size: 256000, type: 'audio/wav', name: entry.fileName });
+  }));
+  const [entry] = await library.addRemote([{ title: 'Far Away', artist: 'NAS', size: 256000, remote: { kind: 'subsonic', serverId: 'srv-1', songId: '9' } }]);
+  assert.equal(entry.stored, false);
+  app.ui.setPage('songs');
+  await sleep(20);
+  const row = $$(app.root, '.songs .song-row').find((r) => /Far Away/.test(textOf(r)));
+  assert($(row, '.src-badge.src-server'));
+  assert(!$(row, '.src-badge').classList.contains('offline'));
+  // A on the row: the chip says Downloading, then the song
+  $$(row, '.load-btn')[0].click();
+  await sleep(40);
+  const chip = $(app.root, '.chip-a');
+  assert(chip.classList.contains('downloading'));
+  assert.equal(textOf($(chip, '.chip-title')), 'Downloading…');
+  progress(128000, 256000);
+  await sleep(40);
+  assert.equal(textOf($(chip, '.chip-title')), 'Downloading 50%');
+  assert.match(chip.getAttribute('title'), /Downloading “Far Away” from your music server/);
+  // the player waiting for it says so too
+  app.player.state = 'loading';
+  app.automix.pendingItem = { kind: 'library', id: entry.id };
+  app.ui.setPage('player');
+  await sleep(60);
+  assert.equal(textOf($(app.root, '.pl-sub')), 'Downloading 50% from your music server');
+  release();
+  await sleep(60);
+  assert.equal(decks[0].count('loadFile'), 1);
+  assert(!chip.classList.contains('downloading'));
+  assert.equal(textOf($(chip, '.chip-title')), 'Far Away');
+  // a newer load on the same deck cancels the download
+  let aborted = false;
+  library.setResolver('subsonic', (e, { signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => {
+      aborted = true;
+      reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    });
+  }));
+  const [other] = await library.addRemote([{ title: 'Slow One', remote: { kind: 'subsonic', serverId: 'srv-1', songId: '10' } }]);
+  app.ui.loadFromLibrary(1, other);
+  await sleep(30);
+  assert($(app.root, '.chip-b').classList.contains('downloading'));
+  app.ui.loadDemo(1, 0);
+  await sleep(60);
+  assert.equal(aborted, true);
+  assert(!$(app.root, '.chip-b').classList.contains('downloading'));
+  assert(!/couldn't be downloaded/.test(toastsOf(app)), 'a cancelled download is not an error');
+  app.ui.destroy();
+});
+
+test('Settings > Google Drive, Help, the menu, the player empty state and all layouts', async () => {
+  const drive = new FakeDrive();
+  const app = makeApp(360, 560, { drive });
+  await startAudio(app);
+  // Settings: sign out of Google Drive
+  app.ui.openMenu();
+  rowByLabel(sheetOf(app), 'Settings').click();
+  let sheet = sheetOf(app);
+  const gsec = $$(sheet, '.sheet-sec').find((s) => textOf($(s, '.sheet-h')) === 'Google Drive');
+  rowByLabel(gsec, 'Sign out of Google Drive').click();
+  assert.equal(drive.count('signOut'), 1);
+  assert.match(toastsOf(app), /Signed out of Google Drive/);
+  assert.equal($$(sheet, 'a').filter((a) => a.getAttribute('href') === 'privacy.html').length, 1, 'About links the privacy page');
+  // Help
+  app.ui.sheets.back();
+  rowByLabel(sheetOf(app), 'Help').click();
+  sheet = sheetOf(app);
+  assert($$(sheet, '.help-h').some((x) => textOf(x) === 'Your music from Google Drive or your NAS'));
+  // Menu > Add music
+  app.ui.openMenu();
+  rowByLabel(sheetOf(app), 'Add music').click();
+  assert.equal(sheetOf(app).dataset.sheet, 'add-music');
+  app.ui.sheets.close();
+  // the player's empty state and Up next header open Add music
+  app.ui.setPage('player');
+  await sleep(40);
+  const empty = $(app.root, '.pq-empty');
+  assert.equal(empty.hidden, false);
+  $(empty, '.pq-add').click();
+  assert.equal(sheetOf(app).dataset.sheet, 'add-music');
+  app.ui.sheets.close();
+  $(app.root, '.pq-addmusic').click();
+  assert.equal(sheetOf(app).dataset.sheet, 'add-music');
+  app.ui.sheets.close();
+  app.ui.destroy();
+  // every layout: the Add music sheet and the server browser open and render
+  for (const [w, h] of [[360, 560], [844, 390], [768, 1000], [1280, 720]]) {
+    const a = makeApp(w, h, { drive: new FakeDrive() });
+    await startAudio(a);
+    a.ui.openAddMusic();
+    assert.equal(sheetOf(a).dataset.sheet, 'add-music', `${w}x${h}`);
+    $(sheetOf(a), '.add-server').click();
+    assert.equal(sheetOf(a).dataset.sheet, 'server');
+    await connect(a);
+    await sleep(60);
+    assert.equal($$(sheetOf(a), '.sb-card').length, 4, `${w}x${h}`);
+    a.ui.destroy();
+  }
+});
+
+test('no errors were logged', () => {
+  assert.deepEqual(errors, []);
+});

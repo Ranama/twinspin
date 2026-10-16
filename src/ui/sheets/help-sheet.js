@@ -1,10 +1,11 @@
 // Help sheet: a plain-language guide to TwinSpin (quick start, decks, records, CUE vs headphones, SYNC, mixer,
-// Auto Mix and the set list, the music player, FX and loops, outputs for this kind of device, keyboard shortcuts,
-// troubleshooting). Static content.
+// Auto Mix and the set list, the music player, music from Google Drive or a NAS, FX and loops, outputs for this
+// kind of device, keyboard shortcuts, troubleshooting). Static content.
 //   host.push(helpSheet(app));
 
 import { h, icon, setKids } from '../dom.js';
 import { env } from '../../core/env.js';
+import { GUIDES } from '../sources-text.js';
 
 const KEYS = [
   ['Q', 'Play / pause deck A'], ['W', 'Cue deck A (hold to preview)'], ['E', 'Sync deck A'],
@@ -106,6 +107,19 @@ export function helpSheet(app) {
             'On the Songs page, + adds a song to the end of the queue; ⋯ has Play now and Play next.',
             'On the DECKS page the strip shows what comes next, with previous, play / pause and next. Tap it to open the player.',
           ])) : null,
+        topic('Your music from Google Drive or your NAS', 'cloud',
+          'Tap Add music (on the Songs page or the player) to see every way in.',
+          list([
+            'Google Drive: tap Google Drive, sign in with Google and pick songs (tap several to pick many). They are saved on this device, so they play offline. TwinSpin only sees the songs you pick.',
+            'A Drive link: share a song or a folder with “Anyone with the link”, copy the link and use Paste a Google Drive link. No sign-in.',
+            'Music server / NAS: run Navidrome on your Synology NAS (or any Subsonic server), then connect with its https:// address. Browse artists, albums and playlists; songs download when they play. Save offline keeps a copy for mixing without waiting.',
+            'No setup at all: your phone’s own file picker reaches Google Drive and your NAS (iPhone: the Files app; Android: the picker’s menu). See Other ways in Add music.',
+            'Songs from Drive show a small cloud, songs from your server a small server sign.',
+          ]),
+          h('p.help-tip', {}, h('span', { text: 'Step-by-step guides: ' }),
+            h('a.src-link', { href: GUIDES.drive, target: '_blank', rel: 'noopener', text: 'Google Drive' }), h('span', { text: ' · ' }),
+            h('a.src-link', { href: GUIDES.nas, target: '_blank', rel: 'noopener', text: 'Synology NAS' }), h('span', { text: ' · ' }),
+            h('a.src-link', { href: GUIDES.privacy, target: '_blank', rel: 'noopener', text: 'Privacy' }))),
         topic('Effects and loops', 'fx',
           list([
             'Tap an effect pad to switch it on, tap again to switch it off. Hold a pad to use it only while you hold.',

@@ -4,7 +4,8 @@
 // time (off while two songs mix, with a short hint; a thin "mixing into" line instead), transport (shuffle,
 // previous, play / pause, next, repeat off / all / one), the transition chooser (DJ mix / Crossfade with its
 // seconds / Gapless), master volume, the Up next list (drag the handle to reorder, x removes, tap plays it now),
-// Clear queue, a collapsible History and an empty state that points to the Songs page.
+// Clear queue and "+ Add" (the Add music sheet), a collapsible History, an empty state with Add music and Open
+// Songs, and "Downloading 45% from your music server" while a server song loads (docs/SOURCES.md section 4).
 // One column on phones (the top part stays put, the queue scrolls under it; the transition chooser opens as a
 // sheet from the options row), two columns from 640 px (phone landscape, tablets, the desktop drawer). AppUI
 // shows it as a page (pp / tp / pl: the whole screen under the header) or a drawer (console), sets the layout
@@ -22,6 +23,8 @@ import {
 } from './player-text.js';
 import { DragReorder } from './drag-reorder.js';
 import { section } from './sheets/sheet.js';
+import { downloadText } from './sources-text.js';
+import { sourceBadgeEl, libraryEntryOf } from './source-badge.js';
 
 const TEXT_EVERY = 3;      // frames between time / state refreshes (~20 per second)
 const HINT_MS = 2600;      // how long the "seeking is off" hint stays
@@ -172,7 +175,14 @@ export class PlayerUI {
     this.emptyText = h('p.pq-empty-text', { text: '' });
     this.songsBtn = h('button.btn.btn-sm.pq-songs', { type: 'button' }, icon('songs'), h('span', { text: 'Open Songs' }));
     this.songsBtn.addEventListener('click', () => app.showSongs());
-    this.empty = h('div.pq-empty', { hidden: true }, icon('listAdd', 'pq-empty-ico'), this.emptyTitle, this.emptyText, this.songsBtn);
+    this.addMusicBtn = h('button.btn.btn-sm.btn-primary.pq-add', { type: 'button', 'aria-haspopup': 'dialog' }, icon('plus'),
+      h('span', { text: 'Add music' }));
+    this.addMusicBtn.addEventListener('click', () => app.openAddMusic());
+    this.empty = h('div.pq-empty', { hidden: true }, icon('listAdd', 'pq-empty-ico'), this.emptyTitle, this.emptyText,
+      h('div.pq-empty-btns', {}, this.addMusicBtn, this.songsBtn));
+    this.addBtn = h('button.btn.btn-ghost.btn-sm.pq-addmusic', { type: 'button', 'aria-haspopup': 'dialog',
+      'aria-label': 'Add music: from this device, Google Drive or your music server' }, icon('plus'), h('span', { text: 'Add' }));
+    this.addBtn.addEventListener('click', () => app.openAddMusic());
     this.histCount = h('span.songs-count');
     this.histList = h('div.pq-list.pq-hist-list', { role: 'list', 'aria-label': 'Played songs, most recent first' });
     this.hist = h('details.pq-hist', { hidden: true },
@@ -180,7 +190,7 @@ export class PlayerUI {
         icon('chevronDown', 'pq-hist-chev')),
       this.histList);
     this.colB = h('div.pl-col-b', {},
-      h('h3.songs-h.pq-h', {}, h('span', { text: 'Up next' }), this.countEl, h('span.sl-h-gap'), this.clearBtn),
+      h('h3.songs-h.pq-h', {}, h('span', { text: 'Up next' }), this.countEl, h('span.sl-h-gap'), this.addBtn, this.clearBtn),
       this.list, this.empty, this.hist);
 
     this.body = h('div.pl-body', {}, this.colA, this.colB);
@@ -508,7 +518,7 @@ export class PlayerUI {
     }
     setText(this.remEl, v.remaining);
     const hint = Date.now() < this._hintUntil ? this._hintText : '';
-    setText(this.subEl, hint || v.sub);
+    setText(this.subEl, hint || (v.busy && this._downloadHint()) || v.sub);
     setClass(this.subEl, 'hint', !!hint);
     this.mixBar.hidden = !v.mixing;
     if (v.mixing) this.mixFill.style.setProperty('--p', String(v.mixPct / 100));
@@ -601,7 +611,8 @@ export class PlayerUI {
     const uid = item.uid;
     const meta = songMeta({ artist: item.artist, bpm: item.bpm, duration: item.duration });
     const main = h('button.pq-main', { type: 'button', 'aria-label': upcoming ? `Play ${title} now` : `Play ${title} again` },
-      h('span.song-title', { text: title }), meta ? h('span.song-meta', { text: meta }) : null);
+      h('span.song-title', {}, sourceBadgeEl(libraryEntryOf(this.app.library, item)), title),
+      meta ? h('span.song-meta', { text: meta }) : null);
     main.addEventListener('click', () => this._jump(uid, title));
     if (!upcoming) {
       const el = h('div.pq-row.pq-played', { role: 'listitem', dataset: { uid: String(uid) } }, main, icon('play', 'pq-replay'));
@@ -615,6 +626,31 @@ export class PlayerUI {
     handle.addEventListener('keydown', (e) => this._key(e, uid));
     const el = h('div.pq-row', { role: 'listitem', dataset: { uid: String(uid) } }, handle, main, rm);
     return { uid, item, el, handle };
+  }
+
+  /**
+   * While the player waits for a song: 'Downloading 45% from your music server' when that song (or any song) is
+   * downloading through the library ('' otherwise).
+   */
+  _downloadHint() {
+    const lib = this.app.library;
+    if (!lib || typeof lib.downloadState !== 'function') return '';
+    const am = this.app.automix;
+    const ids = [];
+    try {
+      for (const it of [am && am.pendingItem, am && am.currentItem]) {
+        if (it && it.kind === 'library' && it.id) ids.push(it.id);
+      }
+      const all = lib.downloading;
+      if (Array.isArray(all)) ids.push(...all);
+      for (const id of ids) {
+        const st = lib.downloadState(id);
+        if (st) return `${downloadText({ bytes: st.bytes, totalBytes: st.totalBytes })} from your music server`;
+      }
+    } catch {
+      return '';
+    }
+    return '';
   }
 
   /** The PLAYER tab / header button light up while the queue plays (AppUI, every few frames). */

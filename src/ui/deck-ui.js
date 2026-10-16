@@ -7,6 +7,7 @@
 
 import { h, icon, setText, setClass, setAttr, trackHold, isHeld, touchedRecently, stampInput, fileLabel, guard } from './dom.js';
 import { deckTime, bpmText, songTitle, fmtFilter } from './format.js';
+import { downloadText } from './sources-text.js';
 import { fmtPercent } from '../core/util.js';
 import { PlatterView } from './widgets/platter.js';
 import { Fader, Knob, TempoField, bindPress } from './widgets/controls.js';
@@ -263,15 +264,21 @@ export class DeckUI {
 
   _syncState(t, playing) {
     const d = this.deck;
-    const loading = !!d.loading;
+    // a song from the music server downloads before the deck loads it (SourcesUI keeps the progress)
+    const src = this.app.sourcesUI;
+    const dl = src && typeof src.deckDownload === 'function' ? src.deckDownload(this.index) : null;
+    const loading = !!d.loading || (!!dl && !t);
     // any deck change (sync, track, loading) repaints the record from scratch on the next frame
     if (this.platter && typeof this.platter.invalidate === 'function') guard('platter invalidate', () => this.platter.invalidate());
     let title;
-    if (t) title = songTitle(t);
+    if (dl) title = downloadText(dl.p);
+    else if (t) title = songTitle(t);
     else if (loading) title = 'Loading…';
     else title = 'Empty: tap to load';
     setText(this.chipTitle, title);
-    setAttr(this.chip, 'title', t ? `${songTitle(t)}${t.artist ? ` – ${t.artist}` : ''}` : null);
+    setClass(this.chip, 'downloading', !!dl);
+    setAttr(this.chip, 'title', dl ? `Downloading “${dl.title}” from your music server`
+      : t ? `${songTitle(t)}${t.artist ? ` – ${t.artist}` : ''}` : null);
     setClass(this.chip, 'empty', !t);
     setClass(this.chip, 'synced', !!d.synced);
     setClass(this.chip, 'playing', playing);

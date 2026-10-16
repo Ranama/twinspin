@@ -4,8 +4,9 @@
 // console tablet landscape / desktop; CSS does the placement from data-layout), runs the single
 // requestAnimationFrame loop, binds widgets to the Deck / Mixer / SyncController / AutoMix / Playlist / Player
 // APIs, and shows the start overlay, resume banner, toasts, confirm dialog, coach marks and sheets.
-//   const ui = new AppUI({ root, engine, decks, sync, settings, library, playlist, automix, player });
-// Contract: docs/CONTRACT.md section 6.4, docs/AUTOMIX.md section 5 and docs/PLAYER.md section 5. Widgets come
+//   const ui = new AppUI({ root, engine, decks, sync, settings, library, playlist, automix, player, sources });
+// Contract: docs/CONTRACT.md section 6.4, docs/AUTOMIX.md section 5, docs/PLAYER.md section 5 and docs/SOURCES.md
+// section 4 (song sources: the Add music sheet, Google Drive, the music server browser; sources-ui.js). Widgets come
 // from ./widgets/*.js.
 
 import { h, icon, setText, setClass, setAttr, trackHold, guard } from './dom.js';
@@ -29,6 +30,7 @@ import { deckSheet } from './sheets/deck-sheet.js';
 import { bindKeyboard } from './keyboard.js';
 import { TrackLoader } from './track-loader.js';
 import { CoachFlow } from './coach-flow.js';
+import { SourcesUI } from './sources-ui.js';
 import { onInstallChange } from './install.js';
 import { APP_VERSION, fetchBuildVersion, collectDiagnostics, offerInstall } from './app-info.js';
 import { WaveView, OverviewView } from './widgets/waveview.js';
@@ -52,11 +54,13 @@ const INDICATOR_EVERY = 6;
 export class AppUI {
   /**
    * @param {{root:HTMLElement, engine:object, decks:object[], sync:object, settings:object, library:object,
-   *          playlist?:object, automix?:object, player?:object}} deps  playlist / automix / player:
+   *          playlist?:object, automix?:object, player?:object, sources?:{gdrive?:object, server?:object}}} deps
+   *          playlist / automix / player:
    *          src/deck/playlist.js, automix.js, player.js (optional: without them the set list, Auto Mix and
-   *          player controls stay hidden; the player needs the other two)
+   *          player controls stay hidden; the player needs the other two); sources: src/sources/gdrive.js
+   *          GoogleDriveSource and subsonic.js MusicServerSource (optional: the Add music sheet explains)
    */
-  constructor({ root, engine, decks, sync, settings, library, playlist = null, automix = null, player = null }) {
+  constructor({ root, engine, decks, sync, settings, library, playlist = null, automix = null, player = null, sources = null }) {
     this.root = root;
     this.engine = engine;
     this.decks = decks;
@@ -66,6 +70,7 @@ export class AppUI {
     this.playlist = playlist || null;
     this.automix = automix || null;
     this.player = this.playlist && this.automix && player ? player : null;
+    this.sources = { gdrive: (sources && sources.gdrive) || null, server: (sources && sources.server) || null };
     this.html = document.documentElement;
     this._amRow = false;
 
@@ -196,6 +201,7 @@ export class AppUI {
     this.coachFlow = new CoachFlow(this, this.coach);
     this.banner = new ResumeBanner(this.overlay, { onResume: () => this.resumeAudio(), onRestart: () => this.restartAudio() });
     this.dialog = new Dialog(this.overlay);
+    this.sourcesUI = new SourcesUI(this);
     this.startOverlay = new StartOverlay(this.overlay, { onStart: () => this.start(false), onDemo: () => this.start(true) });
     this._setInert(true);
 
@@ -243,6 +249,7 @@ export class AppUI {
     }
     this.amui.bind();
     this.playerUI.bind();
+    this.sourcesUI.bind();
     const eng = this.engine;
     if (eng && typeof eng.on === 'function') {
       eng.on('ready', () => this._onEngineReady());
@@ -588,6 +595,16 @@ export class AppUI {
     this.sheets.open(menuSheet(this));
   }
 
+  /** The Add music sheet: This device, Google Drive, music server / NAS, a Drive link, other ways. */
+  openAddMusic() {
+    this.sourcesUI.openAddMusic();
+  }
+
+  /** The music server browser (its connect form when no server is connected). */
+  openMusicServer() {
+    this.sourcesUI.openServer();
+  }
+
   openOutputs() {
     this.sheets.open(outputsSheet(this));
   }
@@ -767,7 +784,7 @@ export class AppUI {
     return this.loader.loadFiles(index, files);
   }
 
-  /** "Add music" or a drop outside the decks. */
+  /** Add music > This device, a Google Drive import, or a drop outside the decks. */
   addFiles(files) {
     return this.loader.addFiles(files);
   }
@@ -1025,6 +1042,7 @@ export class AppUI {
     this.amui.destroy();
     this.playerUI.destroy();
     this.songs.destroy();
+    this.sourcesUI.destroy();
     for (const w of [this.wave, ...this.overviews]) {
       if (w && typeof w.destroy === 'function') guard('destroy', () => w.destroy());
     }

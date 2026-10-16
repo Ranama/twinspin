@@ -10,6 +10,7 @@ import { h, icon, setKids, setText, setClass, setAttr } from './dom.js';
 import { songMeta } from './format.js';
 import { setListBadge, itemTitle } from './automix-text.js';
 import { DragReorder } from './drag-reorder.js';
+import { sourceBadgeEl, libraryEntryOf } from './source-badge.js';
 
 const MIX_LENGTHS = [16, 32, 64];
 
@@ -175,7 +176,8 @@ export class SetListUI {
     rm.addEventListener('click', () => this._remove(uid));
     const el = h('div.sl-row', { role: 'listitem', dataset: { uid: String(uid) } },
       handle,
-      h('div.song-info', {}, h('span.sl-title-row', {}, badge, h('span.song-title', { text: title })),
+      h('div.song-info', {}, h('span.sl-title-row', {}, badge,
+        h('span.song-title', {}, sourceBadgeEl(libraryEntryOf(this.app.library, item)), title)),
         meta ? h('span.song-meta', { text: meta }) : null),
       load(0), load(1), rm);
     handle.addEventListener('pointerdown', (e) => this._dragStart(e, uid));

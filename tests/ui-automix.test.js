@@ -323,7 +323,8 @@ test('set list: add with + and Add all, badges, reorder by drag and keys, remove
   assert.equal(app.playlist.items.length, 3);
   assert.match(toasts(), /Added 2 songs to the set list/);
   // Add music: files go to the library AND the end of the set list
-  const input = $(app.root, '.btn-add input');
+  $(app.root, '.btn-add').click(); // the Add music sheet: This device holds the file input
+  const input = $(app.root, '.add-device input');
   input.files = [{ name: 'four.mp3', size: 10, type: 'audio/mpeg' }];
   input.dispatchEvent(new FakeEvent('change'));
   await sleep(30);

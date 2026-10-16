@@ -1,12 +1,14 @@
 // Track loading for the app UI: files picked or dropped for a deck, "Add music" (library + end of the set list +
 // first empty deck), library rows, set list rows, demo tracks, the load lock ("Deck A is playing. Replace the
-// song?"), and writing analysis results (BPM, duration, first beat) back to the library entry.
+// song?"), writing analysis results (BPM, duration, first beat) back to the library entry, and the download of a
+// music-server song before it loads (progress on the deck chip through SourcesUI; a newer load cancels it).
 //   const loader = new TrackLoader(app);  loader.loadFiles(0, files);  loader.loadFromLibrary(1, entry);
 // The Deck reports its own load errors ('error' events -> toasts) and the Library explains skipped non-audio
 // files; this only adds a fallback toast when a load fails without one.
 
 import { songTitle } from './format.js';
 import { looksLikeAudio } from '../audio/decode.js';
+import { needsDownload, remoteKind, errText, isAbort } from './sources-text.js';
 
 export class TrackLoader {
   /** @param {object} app the AppUI (engine, decks, library, dialog, toast(), lastDeckError) */
@@ -131,23 +133,39 @@ export class TrackLoader {
     await this.loadFromLibrary(index, entry);
   }
 
-  /** A library row's A / B button. */
+  /**
+   * A library row's A / B button (also the music server browser's Load on deck A / B). A song that plays from the
+   * music server downloads first: the deck chip shows the progress, and loading something else on that deck
+   * cancels the download.
+   */
   async loadFromLibrary(index, entry) {
     if (!entry || !this._audioReady()) return;
     const app = this.app;
     const deck = app.decks[index];
     if (!(await this.confirmReplace(deck))) return;
+    const token = ++this.loadToken[index];
+    const src = app.sourcesUI;
+    const remote = needsDownload(entry) && src;
+    const dl = remote ? src.startDeckDownload(index, entry) : null;
     let blob = null;
+    let failure = null;
     try {
-      blob = await app.library.getBlob(entry.id);
-    } catch {
+      blob = dl ? await app.library.getBlob(entry.id, { signal: dl.signal, onProgress: dl.onProgress })
+        : await app.library.getBlob(entry.id);
+    } catch (err) {
       blob = null;
+      failure = err;
+    } finally {
+      if (dl) dl.done();
     }
+    if (this.loadToken[index] !== token) return; // something else was loaded on this deck meanwhile
     if (!blob) {
-      app.toast(`“${songTitle(entry)}” is no longer stored on this device. Add it again.`, { kind: 'error' });
+      if (isAbort(failure)) return;
+      app.toast(remoteKind(entry) === 'server'
+        ? errText(failure, `“${songTitle(entry)}” couldn't be downloaded. Can't reach your music server.`)
+        : `“${songTitle(entry)}” is no longer stored on this device. Add it again.`, { kind: 'error', deck: index ? 'B' : 'A' });
       return;
     }
-    ++this.loadToken[index];
     this.libIds[index] = entry.id;
     // the 60-song cap removes the least recently used songs first
     Promise.resolve()
@@ -236,6 +254,8 @@ export class TrackLoader {
 
   _loadDeck(index, run) {
     const app = this.app;
+    // a music-server download still running for this deck is for a song that is no longer wanted there
+    if (app.sourcesUI) app.sourcesUI.endDeckDownload(index, true);
     let p;
     try {
       p = run();

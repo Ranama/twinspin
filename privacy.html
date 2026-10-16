@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>TwinSpin privacy</title>
+  <meta name="description" content="What TwinSpin keeps on your device and what it sends, in plain words.">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0b0c12">
+  <meta name="referrer" content="strict-origin">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <style>
+    :root {
+      --bg: #0b0c12;
+      --panel: #14151d;
+      --line: #2b2e3c;
+      --text: #f1f2f8;
+      --dim: #a9aec0;
+      --faint: #7c8296;
+      --deck-a: #3da5ff;
+      --deck-b: #ff8a2a;
+      --link: #8ab4ff;
+      color-scheme: dark;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.55 'Barlow', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+    }
+
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: calc(env(safe-area-inset-top, 0px) + 24px) 16px calc(env(safe-area-inset-bottom, 0px) + 48px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 22px;
+      font: 800 22px/1 'Arial Black', system-ui, sans-serif;
+      letter-spacing: 0.01em;
+    }
+
+    .brand-disc {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: radial-gradient(circle, var(--bg) 0 18%, transparent 19%),
+        conic-gradient(from 20deg, var(--deck-a), #9d8cff, #ff8ad6, var(--deck-b), var(--deck-a));
+    }
+
+    .brand-twin { color: var(--deck-a); }
+    .brand-spin { color: var(--deck-b); }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.2;
+    }
+
+    h2 {
+      margin: 30px 0 8px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      font-size: 19px;
+    }
+
+    p, li { color: var(--dim); }
+    strong { color: var(--text); font-weight: 600; }
+    ul { padding-left: 22px; }
+    li + li { margin-top: 6px; }
+
+    a {
+      color: var(--link);
+      text-underline-offset: 3px;
+    }
+
+    .lead {
+      font-size: 18px;
+      color: var(--text);
+    }
+
+    .card {
+      margin: 18px 0;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+
+    .card p { margin: 0; }
+
+    .back {
+      display: inline-flex;
+      align-items: center;
+      min-height: 48px;
+      margin-top: 30px;
+      padding: 0 20px;
+      border-radius: 12px;
+      background: var(--text);
+      color: var(--bg);
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .foot {
+      margin-top: 26px;
+      color: var(--faint);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="brand"><span class="brand-disc" aria-hidden="true"></span><span><span class="brand-twin">Twin</span><span class="brand-spin">Spin</span></span></p>
+    <h1>Privacy</h1>
+    <p class="lead">TwinSpin is a DJ app and music player that runs in your browser. It has no server of its own, no
+      account, no ads and no tracking. Nothing leaves your device except the requests to the services you connect
+      yourself.</p>
+
+    <div class="card">
+      <p><strong>In short:</strong> your songs, set list and settings stay on this device. TwinSpin only talks to
+        Google Drive or your music server when you use them, and to the second device you link for headphones.</p>
+    </div>
+
+    <h2>What stays on your device</h2>
+    <ul>
+      <li><strong>Your songs</strong> (the files you add, and copies you save offline) and their details (title, artist,
+        BPM, length), in your browser's storage for this site.</li>
+      <li><strong>Your set list, settings and outputs</strong>, in the same storage.</li>
+      <li><strong>A music server sign-in key</strong> (never your password), with the server's address and your user
+        name, only when you tick “Remember on this device”. Otherwise it is kept only until you close the app.</li>
+      <li><strong>Google Drive access</strong> lasts about an hour and is kept only in memory: it is gone when you
+        close the app. TwinSpin only notes that you allowed it once, so Google does not ask again. TwinSpin never
+        gets your Google password.</li>
+    </ul>
+    <p>Remove everything at any time with Songs &gt; Clear library, Settings &gt; Music server &gt; Disconnect,
+      Settings &gt; Google Drive &gt; Sign out, Settings &gt; Reset, or your browser's “clear site data” for this
+      site.</p>
+
+    <h2>What is sent, and only when you use it</h2>
+    <ul>
+      <li><strong>Google Drive</strong> (if you use it): Google's sign-in and picker run on Google's own pages and
+        scripts, loaded only when you open Add music. TwinSpin asks only for access to the files you pick
+        (the <em>drive.file</em> permission). It downloads those songs straight to this device. It cannot see
+        the rest of your Drive. Google's <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">privacy
+        policy</a> applies to your Google account. You can remove TwinSpin's access in your Google Account &gt;
+        Security &gt; Third-party apps, or with Settings &gt; Sign out of Google Drive.</li>
+      <li><strong>Google Drive links</strong> you paste: the files behind the link are fetched from Google with this
+        app's public API key. No sign-in.</li>
+      <li><strong>Your music server</strong> (Navidrome or another Subsonic server, for example on your NAS): TwinSpin
+        connects to the address you type, with your user name and a key made from your password. Song lists, cover
+        art and songs come straight from your server to this device.</li>
+      <li><strong>Second device</strong> (headphone mix over Wi-Fi): the two devices connect directly. A public
+        signalling service (PeerJS) helps them find each other, and its code and the QR code maker load from a
+        public code server (CDN) only when you use it; the audio goes between your devices.</li>
+      <li><strong>Fonts</strong>: the app's fonts come from Google Fonts.</li>
+    </ul>
+    <p>Requests to other sites carry only TwinSpin's site address as the referrer (never the page or your songs).</p>
+
+    <h2>What TwinSpin never does</h2>
+    <ul>
+      <li>No analytics, no tracking pixels, no advertising, no selling or sharing of data.</li>
+      <li>No uploads: your songs are never sent anywhere by TwinSpin.</li>
+      <li>No passwords stored.</li>
+    </ul>
+
+    <h2>Contact</h2>
+    <p>TwinSpin is open source. Questions or problems: open an issue at
+      <a href="https://github.com/Ranama/twinspin/issues" target="_blank" rel="noopener">github.com/Ranama/twinspin</a>.</p>
+
+    <a class="back" href="./">Open TwinSpin</a>
+    <p class="foot">Last updated October 2026.</p>
+  </main>
+</body>
+</html>

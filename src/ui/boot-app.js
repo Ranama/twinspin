@@ -1,14 +1,14 @@
 // DJ app wiring: Settings, AudioEngine, Library, Deck A/B, SyncController, Playlist (the set list = the queue),
-// AutoMix, Player (the music player facade) and AppUI (contract section 1, docs/AUTOMIX.md section 5,
-// docs/PLAYER.md sections 4-5).
+// AutoMix, Player (the music player facade), the song sources (GoogleDriveSource, MusicServerSource) and AppUI
+// (contract section 1, docs/AUTOMIX.md section 5, docs/PLAYER.md sections 4-5, docs/SOURCES.md sections 3-4).
 // src/main.js loads this module with ONE dynamic import (so the second-device receiver page never downloads the
 // DJ engine, and a module that fails to load shows a readable message instead of a blank page). Every import
 // in the DJ module graph from here on is static. No side effects at import time.
 //   const app = startApp(document.getElementById('app'));
-//   // { settings, engine, library, decks, sync, playlist, automix, player, ui }
+//   // { settings, engine, library, decks, sync, playlist, automix, player, sources: { gdrive, server }, ui }
 // Screenshot mode (?shot=<name>, for the README pictures) is at the end of this file; without ?shot it never runs.
 
-import { env } from '../core/env.js';
+import { env, config } from '../core/env.js';
 import { Settings } from '../core/settings.js';
 import { AudioEngine } from '../audio/engine.js';
 import { Library } from '../library/library.js';
@@ -17,6 +17,8 @@ import { SyncController } from '../deck/sync.js';
 import { Playlist } from '../deck/playlist.js';
 import { AutoMix } from '../deck/automix.js';
 import { Player } from '../deck/player.js';
+import { GoogleDriveSource } from '../sources/gdrive.js';
+import { MusicServerSource } from '../sources/subsonic.js';
 import { AppUI } from './app-ui.js';
 import { waitFor } from './track-loader.js';
 
@@ -26,7 +28,8 @@ import { waitFor } from './track-loader.js';
  * Auto Mix always starts switched off (a reload never starts music by itself); the set list is restored.
  * @param {HTMLElement} root
  * @returns {{settings:Settings, engine:AudioEngine, library:Library, decks:Deck[], sync:SyncController,
- *   playlist:Playlist|null, automix:AutoMix|null, player:Player|null, ui:AppUI}}
+ *   playlist:Playlist|null, automix:AutoMix|null, player:Player|null,
+ *   sources:{gdrive:GoogleDriveSource|null, server:MusicServerSource|null}, ui:AppUI}}
  */
 export function startApp(root) {
   const shot = shotName();
@@ -59,9 +62,12 @@ export function startApp(root) {
       console.error('[TwinSpin] music player unavailable', err);
     }
   }
+  // Song sources (docs/SOURCES.md): Google Drive picks / links, a music server (Navidrome / Subsonic). Extras too:
+  // without them the Add music sheet explains, and every other song keeps working.
+  const sources = makeSources({ settings, library, shot });
   root.classList.remove('booting');
-  const ui = new AppUI({ root, engine, decks, sync, settings, library, playlist, automix, player });
-  const app = { settings, engine, library, decks, sync, playlist, automix, player, ui, env };
+  const ui = new AppUI({ root, engine, decks, sync, settings, library, playlist, automix, player, sources });
+  const app = { settings, engine, library, decks, sync, playlist, automix, player, sources, ui, env };
   try {
     window.twinspin = app; // handy in the browser console and for remote debugging
   } catch {
@@ -84,6 +90,26 @@ export function startApp(root) {
     });
   if (shot) runShot(app, shot);
   return app;
+}
+
+/**
+ * Build the song sources. A screenshot scene gets none (no remembered server, no Google scripts in the picture).
+ * @returns {{gdrive: GoogleDriveSource|null, server: MusicServerSource|null}}
+ */
+function makeSources({ settings, library, shot }) {
+  const sources = { gdrive: null, server: null };
+  if (shot) return sources;
+  try {
+    sources.gdrive = new GoogleDriveSource({ config: (config && config.google) || {}, library });
+  } catch (err) {
+    console.error('[TwinSpin] Google Drive unavailable', err);
+  }
+  try {
+    sources.server = new MusicServerSource({ settings, library });
+  } catch (err) {
+    console.error('[TwinSpin] music server connection unavailable', err);
+  }
+  return sources;
 }
 
 // ---- Screenshot mode ---------------------------------------------------------------------------------------------

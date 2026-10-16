@@ -20,6 +20,12 @@ before loading your own music.
 
 * **Two spinning record decks** you can scratch, with PLAY, CUE (CDJ style) and one-tap **SYNC** (tempo and beat)
 * **Your own music**: MP3, M4A/AAC, WAV, FLAC and more, straight from the device. Nothing is uploaded.
+* **Google Drive and your NAS**: **Add music** brings songs in from this device, from **Google Drive** (Google's
+  own sign-in and picker; TwinSpin only sees the songs you pick), from a shared **Drive link**, or from your
+  **music server** (Navidrome or another Subsonic server, for example on a Synology NAS): browse artists, albums,
+  playlists and search with cover art, play or queue songs, load them on a deck, **Save offline** for a set
+  without Wi-Fi. Setup guides: [Google Drive](docs/GOOGLE_DRIVE.md), [Synology NAS](docs/SYNOLOGY.md); the phone's
+  own file picker reaches both with no setup at all
 * **Automatic BPM detection** with beat maps that follow songs whose tempo drifts, scrolling beat-marked
   waveforms, whole-song overview strips, tempo field with nudge buttons
 * **Mixer**: channel volume, 3-band EQ with kill, filter, crossfader (smooth or scratch cut), master volume, meters
@@ -110,9 +116,10 @@ everything at once.
 | **MIX page** | Headphone buttons (pre-listen), FILTER, HI / MID / LOW (all the way down = kill), deck volumes, MASTER. |
 | **Crossfader** | Blends from deck A (left) to deck B (right). Smooth or Cut curve (for scratching) in Settings. |
 | **FX page** | Pick deck A or B, then ECHO, REVERB, FLANGER, CRUSH (tap = on/off, hold = only while held), AMOUNT, LOOP 1 / 2 / 4 / 8, ECHO OUT, BRAKE. |
-| **SONGS page** | **+ Add music**, Auto Mix and the set list, your songs with big **A** / **B** load buttons, **+** (add to the set list = the queue) and **⋯** (Play now, Play next, Add to queue, Remove), the demo tracks. |
+| **SONGS page** | **+ Add music** (This device, Google Drive, Music server / NAS, Paste a Google Drive link, Other ways), Auto Mix and the set list, your songs with big **A** / **B** load buttons, **+** (add to the set list = the queue) and **⋯** (Play now, Play next, Add to queue, Save offline for a server song, Remove), the demo tracks. A small cloud marks songs from Google Drive, a small server sign songs from your music server. |
+| **Music server** | Add music > Music server / NAS: connect once (address, user, password; Remember keeps a sign-in key, never the password), then Artists / Albums / Playlists / Search. Tap a song for Play now, Play next, Add to queue, Load on deck A / B or Save offline; **+** adds it to the queue; **Add all** queues an album or playlist. Settings > Music server shows the server and Disconnect. |
 | **PLAYER page** | The queue as a music player: the song now playing (its record spins), seek bar, shuffle / previous / play / next / repeat, AUTO MIX switch, transition (DJ mix, Crossfade, Gapless), volume, Up next (drag the handle, x removes, tap plays it now), History, Clear queue. On a computer it opens from the header, sideways on a phone from the PLAYER button over the waveforms. On the DECKS page the strip shows what comes next with previous / play-pause / next; tap it to open the player. |
-| **Menu** | Outputs, Songs, the music player, Settings and Help. |
+| **Menu** | Outputs, Songs, Add music, the music player, Settings and Help. |
 
 **Keyboard (computer):** deck A `Q` play, `W` cue, `E` sync, `1 2 3 4` loops of 1, 2, 4, 8 beats; deck B `P` play,
 `O` cue, `I` sync, `7 8 9 0` loops; `<-` `->` crossfader (`Shift` for small steps); `M` Auto Mix on / off; `Esc`
@@ -196,6 +203,11 @@ protected and cannot be loaded; buy or export DRM-free files instead.
 If a file does not load, convert it to MP3 or M4A. On iPhone, songs need to be in the **Files** app (On My
 iPhone, iCloud Drive or Downloads). Very long files (over about 15 minutes) use a lot of memory on phones.
 
+Songs on **Google Drive** or a **NAS** work too: **Add music > Google Drive** (after a one-time setup:
+[docs/GOOGLE_DRIVE.md](docs/GOOGLE_DRIVE.md)), **Paste a Google Drive link**, or **Music server / NAS** with Navidrome
+([docs/SYNOLOGY.md](docs/SYNOLOGY.md)). With no setup at all, the phone's own picker reaches both: iPhone Files
+app (Google Drive, Synology Drive, Connect to Server), Android's picker menu (Drive, CIFS Documents Provider).
+
 ## Troubleshooting
 
 | Problem | Fix |
@@ -211,6 +223,8 @@ iPhone, iCloud Drive or Downloads). Very long files (over about 15 minutes) use 
 | **A published update does not show up** | GitHub Pages can take a few minutes. Installed apps show **Update ready**; tap it. |
 | **The screen turns off while mixing** | Settings -> **Keep the screen on**. Some phones still dim in battery-saver mode. |
 | **Second device does not connect** | Both devices on the same Wi-Fi or hotspot (guest networks often block device-to-device traffic), and both need internet for the hand-shake. |
+| **Google Drive says it isn't set up, or Google shows an error** | See the table at the end of [docs/GOOGLE_DRIVE.md](docs/GOOGLE_DRIVE.md#if-something-goes-wrong). Inside Instagram or Facebook's browser Google sign-in is blocked: open TwinSpin in Safari or Chrome. |
+| **"Can't reach your music server"** | Use the `https://….synology.me` address, check the router's port 443 forward; at home see the NAT loopback note. Details: [docs/SYNOLOGY.md](docs/SYNOLOGY.md#if-something-goes-wrong). Songs saved offline always play. |
 
 **Menu -> Settings -> About** shows the version and a diagnostics list (audio engine, output selection, secure
 context), which helps when a phone behaves differently from the computer.
@@ -224,7 +238,14 @@ is just static files. What does go over the network:
 * the app's own files from wherever it is hosted, and its fonts from Google Fonts;
 * only in **Second device** mode: the PeerJS library from a public CDN, the free public PeerJS server and
   Google's public STUN servers for the hand-shake, and a QR code library. The audio itself then goes directly
-  from one device to the other.
+  from one device to the other;
+* only when you use **Google Drive**: Google's sign-in and picker scripts (loaded when you open Add music, and only
+  once Drive is set up) and the songs you pick, straight from Google to your device. TwinSpin asks only for the
+  `drive.file` permission (the files you pick); the sign-in lasts about an hour and is kept in memory;
+* only when you connect a **music server**: requests to the address you typed. Remember keeps a sign-in key on the
+  device, never your password.
+
+The full page: [privacy.html](privacy.html) (also linked in Settings and Help).
 
 ## Development
 
@@ -274,6 +295,11 @@ them.
 
 * [docs/CONTRACT.md](docs/CONTRACT.md): the rules every module follows (APIs, units, behaviour, file ownership)
 * [docs/AUTOMIX.md](docs/AUTOMIX.md): the set list and Auto Mix design
+* [docs/PLAYER.md](docs/PLAYER.md): the music player page
+* [docs/SOURCES.md](docs/SOURCES.md): song sources (Google Drive, music server / NAS); user guides
+  [docs/GOOGLE_DRIVE.md](docs/GOOGLE_DRIVE.md) and [docs/SYNOLOGY.md](docs/SYNOLOGY.md). A fake music server for
+  trying the browser without a NAS: `tests/fixtures/subsonic` (connect to `http://localhost:8100/tests/fixtures/subsonic`
+  with any user name and password while `tools\serve.ps1` runs)
 * [docs/CHANGES.md](docs/CHANGES.md): changes and deviations from the contract, one bullet each
 * `docs/research/`: the research notes behind the design (audio output routing, engine, BPM, PWA, WebRTC, UX)
 

@@ -1,6 +1,7 @@
 // Settings sheet: every user setting in plain words (tempo range, crossfader curve, quantize, vinyl mode, auto
 // sync, Auto Mix transition / length / ease back / bass swap, keep screen awake, haptics, time display, waveform
-// zoom, outdoor contrast), Restart audio, tips, reset, and an About / diagnostics block (engine.diagnostics(),
+// zoom, outdoor contrast), the music server and Google Drive (connected server, disconnect, sign out), Restart
+// audio, tips, reset, and an About / diagnostics block with the privacy link (engine.diagnostics(),
 // feature flags, layout, build).
 //   host.push(settingsSheet(app));
 
@@ -10,6 +11,7 @@ import { env } from '../../core/env.js';
 import { fmtRange, waveSeconds, ZOOM_STEPS } from '../format.js';
 import { formatDiagnostics } from '../app-info.js';
 import { TRANSITIONS } from '../player-text.js';
+import { GUIDES, serverLabel, serverKind } from '../sources-text.js';
 
 const KEEP_ON_RESET = ['outputMode', 'masterDeviceId', 'cueDeviceId', 'alignmentMs', 'splitSwap', 'remoteBus', 'tipsSeen', 'setList'];
 
@@ -119,6 +121,9 @@ export function settingsSheet(app) {
         app.sheets.refresh();
       }, { noChevron: true, className: 'row-danger' });
 
+      // Song sources: the music server and Google Drive (docs/SOURCES.md section 4)
+      const sourceSecs = sourceSections(app);
+
       // About + diagnostics
       const diag = h('pre.diag', { tabindex: '0' });
       const about = h('p.sheet-note.about');
@@ -147,10 +152,69 @@ export function settingsSheet(app) {
         section('Screen', ...screenRows),
         section('Audio', restart.el,
           note('Outputs, headphones and volumes are in the Outputs panel.')),
+        ...sourceSecs,
         section('Help', tips.el, reset.el),
-        section('About', about, details));
+        section('About', about, h('p.sheet-note', {}, h('a.src-link', { href: GUIDES.privacy, target: '_blank', rel: 'noopener',
+          text: 'Privacy: what TwinSpin keeps and sends' })), details));
     },
   };
+}
+
+/**
+ * Settings > Music server (the connected server, open it, disconnect; or connect) and Google Drive (sign out, or
+ * how to set it up).
+ */
+function sourceSections(app) {
+  const src = app.sourcesUI;
+  if (!src) return [];
+  const out = [];
+  const server = src.server;
+  if (server) {
+    let info = null;
+    try {
+      info = server.connected ? server.server : null;
+    } catch {
+      info = null;
+    }
+    if (info) {
+      const kind = serverKind(info);
+      const open = navRow('server', serverLabel(info), [kind, info.url || ''].filter(Boolean).join(' · '), () => {
+        app.sheets.push(src.browser.sheet());
+      });
+      const off = navRow('logout', 'Disconnect', 'Songs you saved offline stay on this device.', () => {
+        src.browser.disconnect().then((done) => {
+          if (done) app.sheets.refresh();
+        });
+      }, { noChevron: true, className: 'row-danger' });
+      out.push(section('Music server', open.el, off.el));
+    } else {
+      const connect = navRow('server', 'Connect a music server', 'Navidrome or another Subsonic server, for example on ' +
+        'a Synology NAS', () => app.sheets.push(src.browser.sheet()));
+      out.push(section('Music server', connect.el));
+    }
+  }
+  const drive = src.gdrive;
+  if (drive) {
+    if (src.driveConfigured) {
+      const signOut = navRow('logout', 'Sign out of Google Drive', 'TwinSpin forgets its Google access on this device. ' +
+        'Songs you imported stay.', () => {
+        try {
+          drive.signOut();
+          app.toast('Signed out of Google Drive', { kind: 'ok' });
+        } catch (err) {
+          console.warn('[TwinSpin] Google sign-out failed', err);
+          app.toast("Signing out didn't work. Reload the page and try again.", { kind: 'error' });
+        }
+      }, { noChevron: true });
+      out.push(section('Google Drive', signOut.el, note('TwinSpin only sees the songs you pick in Google Drive. You can ' +
+        'also remove its access in your Google Account > Security > Third-party apps.')));
+    } else {
+      out.push(section('Google Drive', note('Google Drive is not set up in this copy of TwinSpin yet. Your phone can ' +
+        'still open Drive through Add music > This device.'), h('p.sheet-note', {}, h('a.src-link', { href: GUIDES.drive,
+        target: '_blank', rel: 'noopener', text: 'How to set up Google Drive' }))));
+    }
+  }
+  return out;
 }
 
 function zoomLabel(z) {

@@ -726,6 +726,21 @@ test('a song that fails to load is skipped with a message', async () => {
   assert.equal(f.A.last('loadFile')[1], 's2');
   assert.equal(f.playlist.currentIndex, 1);
   f.done();
+  // a music-server song the library cannot fetch: the skip message carries the library's own words
+  const r = setup({ items: ['s1', 's2'], start: false });
+  const lib = r.playlist.library;
+  const plain = lib.getBlob.bind(lib);
+  lib.getBlob = (id) => {
+    if (id !== 's1') return plain(id);
+    const err = new Error("Can't reach your music server to get “Song 1”. Check your connection.");
+    err.code = 'unreachable';
+    return Promise.reject(err);
+  };
+  r.am.setEnabled(true);
+  await until(() => r.am.state === 'playing', 5000, 'playing');
+  assert.equal(r.A.last('loadFile')[1], 's2');
+  assert.equal(r.log.errors[0], "Skipped “One”. Can't reach your music server to get “Song 1”. Check your connection.");
+  r.done();
 });
 
 test('switched on while a deck plays: that deck is current and its song is found in the list', async () => {

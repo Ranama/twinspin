@@ -837,7 +837,8 @@ test('Songs page: ⋯ opens Play now / Play next / Add to queue / Remove', async
   $(app.root, '.tab-songs').click();
   await sleep(20);
   // add a library song
-  const input = $(app.root, '.btn-add input');
+  $(app.root, '.btn-add').click(); // the Add music sheet: This device holds the file input
+  const input = $(app.root, '.add-device input');
   input.files = [{ name: 'four.mp3', size: 10, type: 'audio/mpeg' }];
   input.dispatchEvent(new FakeEvent('change'));
   await sleep(40);

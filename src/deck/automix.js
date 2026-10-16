@@ -1131,7 +1131,12 @@ export class AutoMix extends Emitter {
     } catch (err) {
       if (!wanted()) return false;
       console.warn('[TwinSpin] Auto Mix: load failed', err);
-      this.emit('error', `Skipped “${item.title || 'a song'}”: it couldn't be loaded.`);
+      // a song source's own words (src/sources/*: an Error with a string `code`, e.g. "Can't reach your music
+      // server ..." or "Connect to your music server to play ...") say why; anything else stays generic
+      const why = err && typeof err.code === 'string' && err.code !== 'aborted' && typeof err.message === 'string' &&
+        err.message ? ` ${err.message}` : '';
+      this.emit('error', why ? `Skipped “${item.title || 'a song'}”.${why}`
+        : `Skipped “${item.title || 'a song'}”: it couldn't be loaded.`);
       return false;
     }
   }

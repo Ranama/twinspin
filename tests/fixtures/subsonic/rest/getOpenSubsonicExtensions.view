@@ -1,0 +1,1 @@
+{"subsonic-response":{"status":"ok","version":"1.16.1","type":"navidrome","serverVersion":"0.64.2 (TwinSpin test fixture)","openSubsonic":true,"openSubsonicExtensions":[{"name":"formPost","versions":[1]},{"name":"transcodeOffset","versions":[1]},{"name":"songLyrics","versions":[1]}]}}

@@ -8,6 +8,7 @@
 import { env } from '../core/env.js';
 import { storageGet, storageSet } from '../core/util.js';
 import { isStandalone, canInstall, promptInstall, showIosInstallHint } from './install.js';
+import { serverKind } from './sources-text.js';
 
 /** App version shown in the menu and diagnostics (the service worker VERSION adds the build stamp). */
 export const APP_VERSION = '1.0.0';
@@ -99,8 +100,39 @@ export function collectDiagnostics(app) {
     library: { persistent: app.library ? app.library.persistent : '-' },
     automix: automixInfo(app),
     player: playerInfo(app),
+    sources: sourcesInfo(app),
     userAgent: ua,
   };
+}
+
+/**
+ * Song sources for the diagnostics block (never throws): whether Google Drive is set up / loaded, and the music
+ * server's kind and status (never its address, user or sign-in key: the block may be shared).
+ */
+function sourcesInfo(app) {
+  const src = app.sources || {};
+  const out = { drive: '-', server: '-' };
+  try {
+    const g = src.gdrive;
+    if (g) {
+      out.drive = !g.configured ? 'not set up' : g.loadError ? 'load failed' : g.ready ? (g.signedIn ? 'ready, signed in' : 'ready')
+        : g.loading ? 'loading' : 'set up';
+    }
+    const s = src.server;
+    if (s) {
+      const info = s.connected ? s.server || {} : null;
+      out.server = info ? `${serverKind(info) || 'server'} (${s.status || 'connected'})` : 'none';
+    }
+    const lib = app.library;
+    if (lib && typeof lib.list === 'function') {
+      const all = lib.list() || [];
+      out.remoteSongs = all.filter((e) => e && e.source === 'subsonic').length;
+      out.driveSongs = all.filter((e) => e && e.source === 'gdrive').length;
+    }
+  } catch {
+    /* partial info is fine */
+  }
+  return out;
 }
 
 /** Auto Mix / set list state for the diagnostics block (never throws). */

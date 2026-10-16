@@ -1,19 +1,26 @@
-// SONGS panel: "+ Add music" (a <label> wrapping the file input, so the native picker opens everywhere), the
+// SONGS panel: "+ Add music" (opens the Add music sheet: This device, Google Drive, music server / NAS, a Drive
+// link and the other ways the phone's own picker reaches Drive and a NAS; docs/SOURCES.md section 4), the
 // SET LIST with the AUTO MIX switch (setlist-ui.js), the user's library (title, artist, BPM, duration) with big
 // A / B load buttons, a + (add to the set list = the player's queue) button and, with a Player, a ⋯ button for
 // Play now / Play next / Add to queue / Remove (sheets/song-sheet.js; without a Player a two-step remove), the
-// demo tracks, storage use, and a plain "Where are my songs?" hint per platform. It is the SONGS page on phones
-// and tablets, a sheet over the centre column in phone landscape and a bottom drawer on the desktop console.
+// demo tracks, storage use, and a plain "Where are my songs?" hint per platform. Songs from Google Drive or a
+// music server carry a small cloud / server badge; a long library renders 120 rows at a time ("Show more"). It is
+// the SONGS page on phones and tablets, a sheet over the centre column in phone landscape and a bottom drawer on
+// the desktop console.
 //   const songs = new SongsUI(app);  shell.append(songs.el);  songs.render();
 // List buttons fire on click (not pointerdown) because the list scrolls.
 
-import { h, icon, setKids, fileLabel } from './dom.js';
+import { h, icon, setKids } from './dom.js';
 import { songMeta, songTitle, fmtBytes } from './format.js';
 import { SetListUI } from './setlist-ui.js';
 import { songSheet } from './sheets/song-sheet.js';
 import { env } from '../core/env.js';
-import { ACCEPT } from '../audio/decode.js';
+import { needsDownload } from './sources-text.js';
+import { sourceBadgeEl } from './source-badge.js';
 import { DEMO_TRACKS } from '../audio/demo-synth.js';
+
+/** Library rows rendered at a time (Show more adds the next batch). */
+const PAGE = 120;
 
 export class SongsUI {
   /** @param {object} app the AppUI (library, decks, addFiles, loadFromLibrary, loadDemo, setPage, dialog) */
@@ -22,9 +29,12 @@ export class SongsUI {
     this.armed = null; // { id, timer } for the two-step remove
     this.usage = null;
     this._usageTimer = 0;
-    const add = fileLabel('btn.btn-primary.btn-add', ACCEPT, true, 'Add music from this device',
-      (files) => app.addFiles(files), icon('plus'), h('span', { text: 'Add music' }));
-    this.addLabel = add.label;
+    this.limit = PAGE;
+    // Add music opens the sheet with every way in (This device keeps the file input, one tap further)
+    this.addBtn = h('button.btn.btn-primary.btn-add', { type: 'button', 'aria-haspopup': 'dialog',
+      'aria-label': 'Add music: from this device, Google Drive or your music server' }, icon('plus'), h('span', { text: 'Add music' }));
+    this.addBtn.addEventListener('click', () => app.openAddMusic());
+    this.addLabel = this.addBtn;
     this.closeBtn = h('button.icon-btn.songs-close', { type: 'button', 'aria-label': 'Close songs' }, icon('close'));
     this.closeBtn.addEventListener('click', () => app.setPage('mix'));
     this.setList = new SetListUI(app);
@@ -71,6 +81,7 @@ export class SongsUI {
       text = 'Use Add music or drop audio files straight onto deck A or B. MP3, M4A, WAV, FLAC and OGG work in most ' +
         'browsers. Your songs stay on this computer; nothing is uploaded.';
     }
+    text += ' Songs on Google Drive or your NAS: Add music lists every way in, also through this device’s own file picker (Other ways).';
     return h('details.songs-help', {}, h('summary', {}, icon('help'), h('span', { text: 'Where are my songs?' })), h('p', { text }));
   }
 
@@ -112,12 +123,18 @@ export class SongsUI {
     if (!entries.length) {
       setKids(this.list, h('div.songs-empty', {},
         h('p', { text: 'No songs yet.' }),
-        h('p', { text: 'Tap Add music and pick audio files from this device. They stay on this device, ready for next time.' })));
+        h('p', { text: 'Tap Add music and pick songs from this device, Google Drive or your music server. Songs from ' +
+          'this device stay here, ready for next time.' })));
     } else {
-      setKids(this.list, entries.map((e) => this._row({
+      const shown = entries.slice(0, Math.max(PAGE, this.limit));
+      const lib = app.library;
+      // a music-server song plays only while that server is connected (Save offline keeps a copy)
+      const offline = (e) => needsDownload(e) && lib && typeof lib.isAvailable === 'function' && !lib.isAvailable(e.id);
+      const rows = shown.map((e) => this._row({
         key: e.id,
         title: songTitle(e),
-        meta: songMeta(e),
+        meta: offline(e) ? [songMeta(e), 'connect your music server to play'].filter(Boolean).join(' · ') : songMeta(e),
+        dim: offline(e),
         entry: e,
         loadedOn: (i) => {
           const d = app.decks[i];
@@ -127,7 +144,18 @@ export class SongsUI {
         onLoad: (i) => app.loadFromLibrary(i, e),
         onAdd: () => app.addToSetList([e]),
         onRemove: () => this._remove(e),
-      })));
+      }));
+      const left = entries.length - shown.length;
+      if (left > 0) {
+        const more = h('button.btn.btn-sm.songs-more', { type: 'button' }, h('span', { text: `Show ${Math.min(left, PAGE)} more` }),
+          h('span.songs-count', { text: String(left) }));
+        more.addEventListener('click', () => {
+          this.limit = shown.length + PAGE;
+          this.render();
+        });
+        rows.push(h('div.songs-more-row', {}, more));
+      }
+      setKids(this.list, rows);
     }
     this.clearBtn.hidden = !entries.length;
     this.addAllBtn.hidden = !app.playlist || entries.length < 2;
@@ -146,7 +174,7 @@ export class SongsUI {
    * button for Play now / Play next / Add to queue / Remove (song-sheet.js); without a Player the two-step
    * remove button stays on the row.
    */
-  _row({ key, title, meta, entry, loadedOn, onLoad, onAdd, onRemove }) {
+  _row({ key, title, meta, entry, loadedOn, onLoad, onAdd, onRemove, dim = false }) {
     const app = this.app;
     const btn = (i) => {
       const id = i ? 'B' : 'A';
@@ -157,7 +185,8 @@ export class SongsUI {
       return b;
     };
     const kids = [
-      h('div.song-info', {}, h('span.song-title', { text: title }), meta ? h('span.song-meta', { text: meta }) : null),
+      h('div.song-info', {}, h('span.song-title', {}, sourceBadgeEl(entry), title),
+        meta ? h('span.song-meta', { text: meta }) : null),
       btn(0), btn(1),
     ];
     if (onAdd && app.playlist) {
@@ -184,7 +213,7 @@ export class SongsUI {
       rm.addEventListener('click', onRemove);
       kids.push(rm);
     }
-    const cls = `div.song-row${app.playlist && onAdd ? '.with-add' : ''}${menu ? '.with-menu' : onRemove ? '' : '.no-rm'}`;
+    const cls = `div.song-row${app.playlist && onAdd ? '.with-add' : ''}${menu ? '.with-menu' : onRemove ? '' : '.no-rm'}${dim ? '.unavailable' : ''}`;
     return h(cls, { role: 'listitem', dataset: { key: String(key) } }, kids);
   }
 
@@ -193,7 +222,9 @@ export class SongsUI {
     const title = songTitle(entry);
     const ok = await this.app.dialog.confirm({
       title: 'Remove this song?',
-      message: `“${title}” is deleted from this device and leaves the queue. Songs on the decks keep playing.`,
+      message: needsDownload(entry)
+        ? `“${title}” leaves your songs and the queue. It stays on your music server.`
+        : `“${title}” is deleted from this device and leaves the queue. Songs on the decks keep playing.`,
       ok: 'Remove', cancel: 'Keep it', danger: true,
     });
     if (!ok) return;

@@ -1,5 +1,5 @@
-// Menu sheet (the header menu button): Outputs (with the current routing), Songs, the music player, Settings,
-// Help, Full screen and Install where available, the iPhone "Add to Home Screen" hint, and the version line.
+// Menu sheet (the header menu button): Outputs (with the current routing), Songs, Add music, the music player,
+// Settings, Help, Full screen and Install where available, the iPhone "Add to Home Screen" hint, and the version line.
 //   host.open(menuSheet(app));
 
 import { h, icon } from '../dom.js';
@@ -7,6 +7,7 @@ import { section, navRow } from './sheet.js';
 import { outputsSheet } from './outputs-sheet.js';
 import { settingsSheet } from './settings-sheet.js';
 import { helpSheet } from './help-sheet.js';
+import { addMusicSheet } from './add-music-sheet.js';
 import { canInstall, promptInstall, showIosInstallHint, canFullscreen, isFullscreen, toggleFullscreen } from '../install.js';
 
 export function menuSheet(app) {
@@ -21,7 +22,8 @@ export function menuSheet(app) {
       });
       const set = navRow('gear', 'Settings', 'Tempo range, scratch, crossfader, screen', () => host.push(settingsSheet(app)));
       const help = navRow('help', 'Help', 'How everything works, in plain words', () => host.push(helpSheet(app)));
-      const rows = [out.el, songs.el];
+      const add = navRow('plus', 'Add music', 'This device, Google Drive, music server / NAS', () => host.push(addMusicSheet(app)));
+      const rows = [out.el, songs.el, add.el];
       if (app.player) {
         const player = navRow('player', 'Music player', 'The queue: play, shuffle, repeat, transitions', () => {
           host.close();

@@ -95,7 +95,7 @@ route, not both: with this one, switch the Actions route off under **Actions -> 
 
 | File | When | What |
 |---|---|---|
-| `.github/workflows/ci.yml` | every push (except `gh-pages`) and pull request | Builds JsCheck, then `tools/JsCheck/jscheck check src tests --strict` and `tools/JsCheck/jscheck test tests` on Linux. Warns if `sw.js` misses a file in its development offline list. |
+| `.github/workflows/ci.yml` | every push (except `gh-pages`) and pull request | Builds JsCheck, then `tools/JsCheck/jscheck check src tests extras --strict` (extras: the Suno helper script) and `tools/JsCheck/jscheck test tests` on Linux. Warns if `sw.js` misses a file in its development offline list. |
 | `.github/workflows/pages.yml` | pushes to `main` that change the app, or by hand | On Windows: the tests, then `tools\publish-web.ps1 -Ci`, which builds `site/` with only the runtime files, stamps the service worker version and offline file list, writes `404.html` for the `/twinspin/` address and checks every module. Then GitHub Pages serves `site/`. |
 
 `tests/realsongs.test.js` needs your own songs in `tests/media/`, which is never committed, so on GitHub it skips

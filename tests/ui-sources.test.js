@@ -1478,14 +1478,19 @@ test('Songs from Suno: the option opens the sheet, the script loads, Copy script
       'Ctrl+Shift+K in Firefox. Mac: Cmd+Option+J in Chrome or Edge, Cmd+Option+K in Firefox.');
     assert.match(stepTexts[3], /Copy script below\. Paste it into the console on suno\.com and press Enter\./);
     assert.match(stepTexts[4], /^The first time, the browser may ask you to type allow pasting\. Do what it says/);
-    assert.match(stepTexts[5], /Keep MP3 ticked \(MP3 is enough for TwinSpin\), leave “Number files in playlist order” ticked and click Download\./);
-    assert.match(stepTexts[6], /allow multiple downloads\. The songs land in your Downloads folder\./);
+    assert.equal(stepTexts[5], 'A panel appears on suno.com. Keep MP3 ticked (MP3 is enough for TwinSpin). In Chrome or Edge choose ' +
+      'Save to: A folder I pick. Click Start, then pick a folder and allow it when the browser asks.');
+    assert.equal(stepTexts[6], 'If you save to the Downloads folder (the only choice in Firefox), allow multiple downloads when the ' +
+      'browser asks. The songs land in your Downloads folder.');
+    assert.equal(textOf($(pl, '.suno-tip')), 'You can Pause, minimise the panel to a small progress pill, or close it and paste ' +
+      'the script again later: it skips the songs it already saved.');
     assert.match(textOf($(pl, '.suno-phone')), /^Phones have no console/);
     // the note is honest about the risk: not Suno's, can stop working, Suno's terms, the account, paid gigs
     const caution = $(pl, '.suno-note');
     assert.equal(caution.getAttribute('role'), 'note');
     assert.match(textOf(caution), /^This helper is not made by Suno\./);
     assert.match(textOf(caution), /If it saves nothing, use Suno’s own Download\./);
+    assert.match(textOf(caution), /If Suno blocks the direct file, the helper uses Suno’s own Download, which counts toward your plan’s downloads\. The panel shows how many you have left\./);
     assert.match(textOf(caution), /Suno’s terms do not allow bots, scraping or downloading in ways Suno did not make for that\./);
     assert.match(textOf(caution), /break those terms, and Suno could act against your account\. Use it at your own risk\./);
     assert.match(textOf(caution), /For paid gigs, use songs from Suno’s own Download on a paid plan\./);
@@ -1505,6 +1510,10 @@ test('Songs from Suno: the option opens the sheet, the script loads, Copy script
     assert.equal(textOf($(show, 'summary')), 'Show the script');
     const box = $(show, 'textarea.suno-code');
     assert.equal(box.value, want, 'the whole script, unchanged');
+    // the steps name the panel's own labels (the script builds them with these exact texts)
+    for (const label of ["text: 'Save to'", "radio('folder', 'A folder I pick", "radio('downloads', 'Downloads folder'", "text: 'Start'",
+      "text: 'Pause'", "label: 'MP3 audio'", "check('skipSaved', 'Skip songs saved before')"]) assert(want.includes(label), `the panel has ${label}`);
+    assert(/'Start again'/.test(want) && /'Resume'/.test(want) && /minimise/i.test(want), 'Start again, Resume, minimise');
     assert.equal(box.getAttribute('readonly'), '');
     // Download script (.js): a plain same-origin link to the file, saved under its own name
     const dl = $(sheet, 'a.suno-download');

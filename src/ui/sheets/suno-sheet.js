@@ -3,11 +3,14 @@
 //  * One song at a time (phone or computer): Suno's own ⋯ > Download > MP3 (WAV on paid plans), then This device.
 //  * A whole playlist at once (computer): a helper script that runs in the browser console on suno.com and
 //    downloads every song the signed-in account made in a playlist (extras/suno-playlist-downloader.js, shipped as
-//    is). Copy script (the clipboard inside the tap; else the code selected in the read-only box), Download script
-//    (.js) (a plain same-origin link) and Show the script (the whole code). The text is fetched only when this
+//    is: a panel with Start / Pause / Stop, progress, a minimised pill, saving into a folder in Chrome and Edge, and
+//    resume). Copy script (the clipboard inside the tap; else the code selected in the read-only box), Download
+//    script (.js) (a plain same-origin link) and Show the script (the whole code). The text is fetched only when this
 //    sheet opens; when it cannot load, a plain error links the file on GitHub. A calm note says the helper is not
-//    made by Suno and can stop working, that Suno's terms do not allow bots or scraping (Suno could act on the account),
-//    that paid gigs need songs from Suno's own Download on a paid plan, and to paste only code you trust.
+//    made by Suno and can stop working, that a blocked direct file means Suno's own Download (it counts toward the
+//    plan's downloads; the panel shows how many are left), that Suno's terms do not allow bots or scraping (Suno could
+//    act on the account), that paid gigs need songs from Suno's own Download on a paid plan, and to paste only code
+//    you trust.
 //  * Get them into TwinSpin: This device on the computer, or a shared Google Drive folder for the phone (Paste a
 //    Google Drive link, remembered under Saved links).
 // The Drive link sheet comes in as an option (add-music-sheet.js opens this sheet, so no import cycle).
@@ -128,6 +131,8 @@ export function sunoSheet(app, { driveLinkSheet = null } = {}) {
           h('p', { text: 'This helper is not made by Suno. It reads your playlist the way suno.com does and saves the ' +
             'songs you made to your computer. Suno can change their site at any time, and then the helper stops ' +
             'working. If it saves nothing, use Suno’s own Download.' }),
+          h('p', { text: 'If Suno blocks the direct file, the helper uses Suno’s own Download, which counts toward your ' +
+            'plan’s downloads. The panel shows how many you have left.' }),
           h('p', { text: 'Suno’s terms do not allow bots, scraping or downloading in ways Suno did not make for that. ' +
             'Using this helper can break those terms, and Suno could act against your account. Use it at your own ' +
             'risk. For paid gigs, use songs from Suno’s own Download on a paid plan.' }),
@@ -149,9 +154,12 @@ export function sunoSheet(app, { driveLinkSheet = null } = {}) {
           'Come back here and click Copy script below. Paste it into the console on suno.com and press Enter.',
           ['The first time, the browser may ask you to type ', code('allow pasting'), '. Do what it says, then paste ' +
             'again and press Enter.'],
-          'A panel appears on suno.com. Keep MP3 ticked (MP3 is enough for TwinSpin), leave “Number files in ' +
-            'playlist order” ticked and click Download.',
-          'When the browser asks, allow multiple downloads. The songs land in your Downloads folder.'),
+          'A panel appears on suno.com. Keep MP3 ticked (MP3 is enough for TwinSpin). In Chrome or Edge choose ' +
+            'Save to: A folder I pick. Click Start, then pick a folder and allow it when the browser asks.',
+          'If you save to the Downloads folder (the only choice in Firefox), allow multiple downloads when the browser ' +
+            'asks. The songs land in your Downloads folder.'),
+        h('p.sheet-note.suno-tip', { text: 'You can Pause, minimise the panel to a small progress pill, or close it and ' +
+          'paste the script again later: it skips the songs it already saved.' }),
         h('div.suno-actions', {}, copyBtn, download),
         status, err, show);
 

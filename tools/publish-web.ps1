@@ -435,8 +435,9 @@ if ($SkipCheck) {
 } else {
   Step 'Checking every JavaScript module of the site'
   $ps = (Get-Process -Id $PID).Path
-  # extras\ is not checked: its scripts are classic scripts for other websites (the Suno helper runs in the browser
-  # console on suno.com), never imported by the app, and they are shipped exactly as they are.
+  # extras\ is not checked here: its scripts are classic scripts for other websites (the Suno helper runs in the
+  # browser console on suno.com), never imported by the app, and they are shipped exactly as they are. CI checks
+  # them (ci.yml: check src tests extras) and tests\suno-downloader*.test.js run the Suno helper.
   $r = Invoke-Quiet $ps @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $JsCheck, 'check', $Site, '--exclude', 'extras')
   $summary = @($r.Out | Where-Object { $_ -match '^(OK|FAIL) ' } | Select-Object -Last 1)
   $fatal = @($r.Out | Where-Object { $_ -match 'SyntaxError|cannot resolve|points to a directory|letter case is ignored|does not provide an export|bare .* specifier' })

@@ -30,8 +30,11 @@ before loading your own music.
 * **Songs from Suno**: **Add music > Songs from Suno** shows how to download your own Suno songs and add them:
   one at a time with Suno's own Download, or a whole playlist at once on a computer with a small helper script
   you paste into the browser console on suno.com ([extras/suno-playlist-downloader.js](extras/suno-playlist-downloader.js):
-  Copy script, Download script or read it in the app), then into TwinSpin from this device or, for your phone,
-  through a shared Google Drive folder. The helper is not made by Suno, and Suno's terms do not allow bots or
+  Copy script, Download script or read it in the app). Its panel shows progress per song and per file, can Pause,
+  Resume and Stop, minimises to a small progress pill, saves into a folder you pick in Chrome and Edge, and resumes
+  where it left off when you paste it again; when Suno blocks the direct file it uses Suno's own Download (that counts
+  toward your plan's downloads, and the panel shows how many are left). Then into TwinSpin from this device or, for
+  your phone, through a shared Google Drive folder. The helper is not made by Suno, and Suno's terms do not allow bots or
   scraping: use it at your own risk (for paid gigs, use songs from Suno's own Download on a paid plan)
 * **Automatic BPM detection** with beat maps that follow songs whose tempo drifts, scrolling beat-marked
   waveforms, whole-song overview strips, tempo field with nudge buttons
@@ -272,7 +275,8 @@ src/library/                 the song list (IndexedDB)
 src/remote/                  second device over WebRTC (PeerJS, loaded only when used)
 src/ui/                      app UI, pages and sheets; src/ui/widgets/ = records, faders, knobs, waveforms
 icons/                       app icons (made by tools/make-icons.ps1)
-extras/                      files the app offers for download (the Suno playlist helper script, shipped as is)
+extras/                      files the app offers for download (the Suno playlist helper script, shipped as is;
+                             tests/suno-downloader*.test.js test it)
 tests/                       *.test.js for JsCheck; tests/helpers/ = fake DOM and models
 tools/                       serve, phone-link, publish-web, make-icons, JsCheck
 docs/                        CONTRACT.md, AUTOMIX.md, CHANGES.md, DEPLOY.md, research notes, screenshots
@@ -285,7 +289,7 @@ The bundled **JsCheck** (a small .NET tool around the Jint JavaScript interprete
 and tests the code. It needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the first run builds it.
 
 ```bash
-tools/JsCheck/jscheck check src tests          # syntax, imports, exports, undeclared names
+tools/JsCheck/jscheck check src tests extras   # syntax, imports, exports, undeclared names
 tools/JsCheck/jscheck test tests               # every tests/*.test.js
 tools/JsCheck/jscheck run tests/pwa.test.js    # one file
 ```

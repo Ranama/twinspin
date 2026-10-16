@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Suno downloader panel (dev fixture)</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; background: #0d0d10; color: #ddd; font: 14px/1.5 system-ui, sans-serif; padding: 24px; }
+  code { background: #222; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>Fake suno.com playlist</h1>
+<p>Dev-only browser check for <code>extras/suno-playlist-downloader.js</code>: Suno's API, the download bucket, the folder
+picker and file downloads are all faked here, so nothing leaves this page and nothing is saved to disk. The script's
+"only on suno.com" guard is patched for this page only.</p>
+<p>Query options: <code>?slow=1</code> (slower files), <code>?quota=0</code> (no downloads left),
+<code>?flaky=1</code> (a 429 and a 503 along the way).</p>
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  const SLOW = q.has('slow') ? 350 : 120;
+  let quota = q.has('quota') ? Number(q.get('quota')) : 17;
+  const FLAKY = q.has('flaky');
+  const PLAYLIST = '11111111-2222-3333-4444-555555555555';
+  const ME = 'user-me', OTHER = 'user-other';
+  const titles = ['Neon Rain', 'Vine Trip (Club Mix)', 'Someone Else\'s Song', 'Midnight / Dawn: "Part 2"', 'Bass <Tunnel>',
+    'Unfinished Idea', 'Glass Hearts', 'Another Artist Track', 'Kaleido', 'Afterglow 🌈'];
+  const clips = titles.map((t, i) => ({
+    id: 'c' + String(i).padStart(7, '0') + '-aaaa-bbbb-cccc-' + String(i).padStart(12, '0'),
+    title: t,
+    user_id: (i === 2 || i === 7) ? OTHER : ME,
+    handle: (i === 2 || i === 7) ? 'someone' : 'me',
+    status: i === 5 ? 'streaming' : 'complete',
+    audio_url: i === 0 ? 'https://cdn1.suno.ai/c0000000.mp3' : 'https://studio-api.prod.suno.com/api/forbidden',
+    image_url: 'https://cdn2.suno.ai/image_' + i + '.jpeg',
+    video_url: 'https://cdn1.suno.ai/c' + i + '.mp4',
+    metadata: { prompt: i % 2 ? '[Verse]\nla la la' : '' },
+  }));
+  const polls = {};
+  let flakyHits = 0;
+  const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), { status, headers: Object.assign({ 'content-type': 'application/json' }, extra) });
+  const fileResponse = (mime, size) => {
+    const head = mime === 'audio/mpeg' ? [0x49, 0x44, 0x33, 4, 0] : mime === 'video/mp4' ? [0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70] : [0xff, 0xd8, 0xff];
+    let sent = 0;
+    const stream = new ReadableStream({
+      async pull(c) {
+        if (sent >= size) { c.close(); return; }
+        await new Promise((r) => setTimeout(r, SLOW));
+        const n = Math.min(64 * 1024, size - sent), chunk = new Uint8Array(n);
+        if (sent === 0) chunk.set(head);
+        sent += n; c.enqueue(chunk);
+      },
+    });
+    return new Response(stream, { status: 200, headers: { 'content-type': mime, 'content-length': String(size) } });
+  };
+  window.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+    const method = (init.method || 'GET').toUpperCase();
+    await new Promise((r) => setTimeout(r, 60));
+    if (init.signal && init.signal.aborted) throw new DOMException('aborted', 'AbortError');
+    if (/suno\.com$/.test(url.hostname) && url.pathname.startsWith('/api/')) {
+      const p = url.pathname;
+      if (!String((init.headers || {}).Authorization || '').startsWith('Bearer ')) return json({ detail: 'unauthorized' }, 401);
+      if (p.startsWith('/api/feed')) return json({ clips: [clips[0]] });
+      if (p === '/api/billing/info/') return json({ download_usage: { current_period_downloads_limit: 20, current_period_downloads_used: 20 - quota, additional_download_remaining: 0 } });
+      if (p === '/api/playlist/' + PLAYLIST + '/') {
+        const page = Number(url.searchParams.get('page') || 1);
+        return json({ name: 'Club Night Vol. 1', num_total_results: clips.length, playlist_clips: page === 1 ? clips.slice(0, 6).map((c) => ({ clip: c })) : page === 2 ? clips.slice(6).map((c) => ({ clip: c })) : [] });
+      }
+      if (p === '/api/download/authorize' && method === 'POST') {
+        if (FLAKY && flakyHits++ === 1) return json({ detail: 'slow down' }, 429, { 'retry-after': '2' });
+        if (quota <= 0) return json({ detail: 'download limit reached' }, 402);
+        quota--; return json({ ok: true });
+      }
+      const m = /^\/api\/download\/clip\/([^/]+)$/.exec(p);
+      if (m) {
+        if (FLAKY && flakyHits++ === 4) return json({ detail: 'oops' }, 503);
+        polls[m[1]] = (polls[m[1]] || 0) + 1;
+        return json(polls[m[1]] < 2 ? { ok: true, status: 'processing' } : { ok: true, status: 'ready', download_url: 'https://suno-data-uploads.s3.amazonaws.com/studio/uploads/' + m[1] + '.mp3?Expires=1' });
+      }
+      const w = /^\/api\/gen\/([^/]+)\/(convert_wav|wav_file)\/$/.exec(p);
+      if (w) return w[2] === 'convert_wav' ? json({}) : json({ wav_file_url: 'https://suno-data-uploads.s3.amazonaws.com/studio/uploads/' + w[1] + '.wav' });
+      return json({ detail: 'not found' }, 404);
+    }
+    if (url.hostname === 'cdn1.suno.ai' && url.pathname.endsWith('.mp3')) return new Response('MissingKey', { status: 403 });
+    if (url.hostname === 'suno-data-uploads.s3.amazonaws.com') return fileResponse(url.pathname.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg', 900 * 1024);
+    if (url.hostname === 'cdn1.suno.ai' && url.pathname.endsWith('.mp4')) return fileResponse('video/mp4', 1500 * 1024);
+    if (url.hostname === 'cdn2.suno.ai') return fileResponse('image/jpeg', 200 * 1024);
+    return new Response('blocked by the fixture: ' + url.href, { status: 599 });
+  };
+  // Downloads mode: count the files instead of saving them.
+  window.__saved = [];
+  const click = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () { if (this.download) { window.__saved.push(this.download); return; } return click.call(this); };
+  // Folder mode: an in-memory folder.
+  const fakeDir = (name) => ({
+    kind: 'directory', name, files: {}, dirs: {},
+    async queryPermission() { return 'granted'; }, async requestPermission() { return 'granted'; },
+    async getDirectoryHandle(n) { return this.dirs[n] || (this.dirs[n] = fakeDir(n)); },
+    async getFileHandle(n, o) {
+      const dir = this;
+      if (!(n in dir.files) && !(o && o.create)) throw new DOMException('not found', 'NotFoundError');
+      if (!(n in dir.files)) dir.files[n] = 0;
+      return { kind: 'file', name: n, async getFile() { return { size: dir.files[n] }; },
+        async createWritable() { let size = 0; return { async write(b) { size += b.size || b.byteLength || 0; }, async close() { dir.files[n] = size; window.__saved.push(n); }, async abort() {} }; } };
+    },
+  });
+  window.__folder = fakeDir('Music');
+  window.showDirectoryPicker = () => Promise.resolve(window.__folder);
+  window.Clerk = { session: { getToken: async () => 'fixture-token' } };
+  history.replaceState(null, '', '/playlist/' + PLAYLIST + location.search);
+  // Loaded with XHR because fetch is the fake above.
+  window.__load = async () => {
+    const res = await new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest(); x.open('GET', '/extras/suno-playlist-downloader.js'); x.onload = () => resolve(x.responseText); x.onerror = reject; x.send();
+    });
+    const patched = res.replace('test(location.hostname)', "test('suno.com')");
+    if (patched === res) throw new Error('fixture: the suno.com guard was not found; update the fixture');
+    const s = document.createElement('script');
+    s.textContent = patched;
+    document.body.appendChild(s);
+  };
+  window.__load();
+})();
+</script>
+</body>
+</html>

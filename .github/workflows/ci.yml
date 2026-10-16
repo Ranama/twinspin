@@ -1,6 +1,6 @@
 # CI: checks every JavaScript module and runs the test suite with the bundled JsCheck (.NET, no Node needed).
 # Runs on every push and pull request. The same commands work locally in Git Bash:
-#   tools/JsCheck/jscheck check src tests
+#   tools/JsCheck/jscheck check src tests extras
 #   tools/JsCheck/jscheck test tests
 name: CI
 
@@ -49,8 +49,10 @@ jobs:
 
       # Syntax, imports, exports, letter case (GitHub Pages is case-sensitive) and undeclared names.
       # --strict: warnings fail too (docs/CONTRACT.md asks for 0 errors and 0 warnings).
+      # extras/ holds the Suno helper, a classic console script for suno.com: it parses as a module too, so it is checked
+      # here (tests/suno-downloader*.test.js run it); the site build (tools/publish-web.ps1) still leaves it out.
       - name: Check modules
-        run: bash tools/JsCheck/jscheck check src tests --strict
+        run: bash tools/JsCheck/jscheck check src tests extras --strict
 
       # Every tests/*.test.js. tests/realsongs.test.js skips its songs here (tests/media/ is not in git).
       # --timeout: hosted runners are slower than a desktop; the 60 s budget per file is for local runs.

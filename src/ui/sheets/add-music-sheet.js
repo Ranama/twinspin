@@ -1,9 +1,10 @@
 // Add music sheet (docs/SOURCES.md section 4): the four ways to bring songs in, as big rows: This device (the
 // file input, opens the system picker in the same tap), Google Drive (Google's own picker; a short explanation and
-// the setup guide while it is not set up), Music server / NAS (the server browser) and Paste a Drive link; then a
-// collapsible "Other ways" card: how the phone's own file picker already reaches Google Drive and the NAS
-// (iPhone Files app, Android system picker, CIFS Documents Provider, a mapped network drive), current platform
-// first. Opened by the Songs page's Add music button, the player's empty state and the menu.
+// the setup guide while it is not set up), Music server / NAS (the server browser) and Paste a Drive link (with up
+// to 3 saved links right under it, src/ui/saved-links.js); then a collapsible "Other ways" card: how the phone's
+// own file picker already reaches Google Drive and the NAS (iPhone Files app, Android system picker, CIFS
+// Documents Provider, a mapped network drive), current platform first. Opened by the Songs page's Add music
+// button, the player's empty state and the menu.
 //   app.sheets.open(addMusicSheet(app));  host.push(driveLinkSheet(app));
 
 import { h, icon, fileLabel } from '../dom.js';
@@ -11,6 +12,7 @@ import { section } from './sheet.js';
 import { ACCEPT } from '../../audio/decode.js';
 import { env } from '../../core/env.js';
 import { otherWays, GUIDES } from '../sources-text.js';
+import { savedLinksSection, savedLinksQuick } from '../saved-links.js';
 
 /** One big option row: icon, label, detail, chevron. `tag` 'button' (default) or an element from fileLabel. */
 function optionKids(ico, label, detail) {
@@ -93,9 +95,10 @@ export function addMusicSheet(app) {
         host.push(src.browser.sheet());
       });
 
-      // Paste a Drive link (needs only the API key: no sign-in)
+      // Paste a Drive link (needs only the API key: no sign-in); the links imported before, one tap away
       const link = option('add-link', 'link', 'Paste a Google Drive link', 'A song or a folder shared with “Anyone with ' +
         'the link”. No sign-in.', () => host.push(driveLinkSheet(app)));
+      const quick = savedLinksQuick(app, host, { openAll: () => host.push(driveLinkSheet(app)) });
 
       // Other ways: the phone's own file picker already reaches Drive and the NAS
       const ways = otherWays(env).map((w) => h('section.add-way', { dataset: { way: w.id } },
@@ -108,12 +111,13 @@ export function addMusicSheet(app) {
         h('p.add-guides', {}, guideLink(GUIDES.nas, 'NAS guide'), guideLink(GUIDES.drive, 'Google Drive guide')));
 
       body.append(
-        section('', device, drive.el, driveInfo, srv.el, link.el),
+        section('', device, drive.el, driveInfo, srv.el, link.el, quick.el),
         section('', other),
         h('p.sheet-note.add-privacy', {}, h('span', { text: 'Songs stay on this device. TwinSpin only talks to the ' +
           'services you connect. ' }), h('a.src-link', { href: GUIDES.privacy, target: '_blank', rel: 'noopener', text: 'Privacy' })));
       return () => {
         src.onDriveState = null;
+        quick.destroy();
       };
     },
   };
@@ -121,6 +125,7 @@ export function addMusicSheet(app) {
 
 /**
  * Paste a Google Drive link: a public ("Anyone with the link") song or folder, imported with the API key only.
+ * The links imported before are listed above the field (Saved links: Import again, Copy link, Rename, Remove).
  * @param {object} app the AppUI (sourcesUI)
  */
 export function driveLinkSheet(app) {
@@ -178,15 +183,19 @@ export function driveLinkSheet(app) {
       input.addEventListener('input', () => {
         err.hidden = true;
       });
+      // the links imported before (hidden while there are none), above the paste field
+      const saved = savedLinksSection(app, host);
       body.append(
+        saved.el,
         section('', form),
         section('How to get the link', h('ol.help-list.src-steps', {},
           h('li', { text: 'In Google Drive, open the song or folder’s menu (⋮) > Share.' }),
           h('li', { text: 'Under General access choose “Anyone with the link” (Viewer).' }),
           h('li', { text: 'Tap Copy link, come back here and paste it.' })),
         h('p.sheet-note', { text: 'A folder link imports every song in it (not the folders inside it). Anyone who has ' +
-          'the link can open those files, so share only music you are happy to share.' })));
-      return undefined;
+          'the link can open those files, so share only music you are happy to share. Links you import are ' +
+          'remembered on this device under Saved links.' })));
+      return () => saved.destroy();
     },
   };
 }

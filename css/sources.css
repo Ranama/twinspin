@@ -1,7 +1,8 @@
-/* Song sources (docs/SOURCES.md section 4): the Add music sheet, the Google Drive link form, the music server
-   browser (connect form, tabs, album grid, song rows, album / playlist / artist pages), the import bar, the small
-   cloud / server badges on song rows and the deck chip while a song downloads. (The phone-sized Google Picker
-   rules are injected by src/sources/gdrive.js, PICKER_CSS.)
+/* Song sources (docs/SOURCES.md section 4): the Add music sheet, the Google Drive link form and its saved links
+   (quick rows in Add music, cards in the link sheet), the music server browser (connect form, tabs, album grid,
+   song rows, album / playlist / artist pages), the import bar, the small cloud / server badges on song rows and
+   the deck chip while a song downloads. (The phone-sized Google Picker rules are injected by
+   src/sources/gdrive.js, PICKER_CSS.)
    Tokens come from css/app.css. Text fields use 16 px text so iPhone Safari never zooms in on focus. */
 
 /* ------------------------------------------------------------------------------------------- Add music */
@@ -188,7 +189,8 @@ label.add-opt:focus-visible {
   line-height: 1.4;
 }
 
-.src-error {
+.src-error,
+.dl-error {
   margin: 6px 0 0;
   padding: 10px 12px;
   border-radius: 10px;
@@ -822,19 +824,258 @@ label.add-opt:focus-visible {
   letter-spacing: 0.04em;
 }
 
+/* ------------------------------------------------------------------------------------ saved Drive links */
+
+/* Add music: up to 3 quick rows under "Paste a Google Drive link", lined up with the option's label */
+.add-saved {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 6px 58px;
+}
+
+.add-saved-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 4px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.add-saved-ico,
+.add-saved-ico .ico {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: #8ab4ff;
+}
+
+.add-saved-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.add-saved-name,
+.dl-name {
+  font-weight: 600;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.add-saved-meta,
+.dl-meta {
+  color: var(--dim);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.add-saved-go {
+  flex: none;
+}
+
+.add-saved-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  color: #8ab4ff;
+  font-weight: 600;
+  font-size: 15px;
+  text-align: left;
+}
+
+.add-saved-all .row-chev {
+  margin-left: auto;
+  color: inherit;
+}
+
+@media (max-width: 359px) {
+  .add-saved {
+    margin-left: 0;
+  }
+}
+
+/* the Google Drive link sheet: a card per saved link. Phones: name + ⋯ on top, a full-width Import again under
+   it; wider panels put everything on one line. */
+.dl-saved[hidden] + .sheet-sec {
+  border-top: 0;
+}
+
+.dl-note {
+  margin-top: 0;
+}
+
+.dl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  container: dllist / inline-size;
+}
+
+.dl-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 44px;
+  grid-template-areas:
+    'ico main more'
+    'go go go';
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 6px 10px 10px;
+  border-radius: 12px;
+  background: var(--well);
+  border: 1px solid var(--line);
+}
+
+.dl-ico {
+  grid-area: ico;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  color: #8ab4ff;
+}
+
+.dl-ico .ico {
+  width: 22px;
+  height: 22px;
+}
+
+.dl-main {
+  grid-area: main;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dl-name {
+  font-size: 16px;
+}
+
+.dl-go {
+  grid-area: go;
+  width: 100%;
+  min-height: 48px;
+}
+
+.dl-more {
+  grid-area: more;
+}
+
+.dl-row.open .dl-more {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.dl-menu {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dl-actions .btn {
+  flex: 1 1 80px;
+  padding: 0 10px;
+}
+
+.dl-rm {
+  border-color: rgba(var(--warn-rgb), 0.55);
+  color: var(--warn);
+}
+
+.dl-rm.armed {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: #fff;
+}
+
+.dl-copy-note {
+  margin: 0;
+}
+
+.dl-row.renaming {
+  grid-template-columns: 40px minmax(0, 1fr);
+  grid-template-areas: 'ico main';
+  align-items: start;
+}
+
+.dl-rename {
+  grid-area: main;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dl-rename-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.dl-rename-btns .btn {
+  flex: 1;
+}
+
+.dl-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 8px;
+  padding-top: 8px;
+}
+
+.dl-foot .btn {
+  padding: 0 8px;
+}
+
+@container dllist (min-width: 460px) {
+  .dl-row {
+    grid-template-columns: 40px minmax(0, 1fr) auto 44px;
+    grid-template-areas: 'ico main go more';
+  }
+
+  .dl-go {
+    width: auto;
+  }
+}
+
 /* -------------------------------------------------------------------------------------- outdoor contrast */
 
 :root[data-outdoor='1'] .add-opt-ico,
 :root[data-outdoor='1'] .sb-cover,
 :root[data-outdoor='1'] .src-input,
-:root[data-outdoor='1'] .import-bar {
+:root[data-outdoor='1'] .import-bar,
+:root[data-outdoor='1'] .dl-row,
+:root[data-outdoor='1'] .dl-ico {
   border-width: 2px;
   border-color: var(--edge);
 }
 
 :root[data-outdoor='1'] .src-link,
 :root[data-outdoor='1'] .src-badge.src-gdrive,
-:root[data-outdoor='1'] .src-badge.src-server {
+:root[data-outdoor='1'] .src-badge.src-server,
+:root[data-outdoor='1'] .add-saved-ico,
+:root[data-outdoor='1'] .add-saved-all,
+:root[data-outdoor='1'] .dl-ico {
   color: var(--text);
 }
 

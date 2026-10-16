@@ -112,6 +112,7 @@ export function helpSheet(app) {
           list([
             'Google Drive: tap Google Drive, sign in with Google and pick songs (tap several to pick many). They are saved on this device, so they play offline. TwinSpin only sees the songs you pick.',
             'A Drive link: share a song or a folder with “Anyone with the link”, copy the link and use Paste a Google Drive link. No sign-in.',
+            'Drive links you import are remembered on this device (Add music > Paste a Google Drive link > Saved links), so you can import one again with a tap; clearing the browser’s site data removes them.',
             'Music server / NAS: run Navidrome on your Synology NAS (or any Subsonic server), then connect with its https:// address. Browse artists, albums and playlists; songs download when they play. Save offline keeps a copy for mixing without waiting.',
             'No setup at all: your phone’s own file picker reaches Google Drive and your NAS (iPhone: the Files app; Android: the picker’s menu). See Other ways in Add music.',
             'Songs from Drive show a small cloud, songs from your server a small server sign.',

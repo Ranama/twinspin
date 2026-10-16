@@ -1,8 +1,9 @@
-// Song sources in the app UI (docs/SOURCES.md section 4): the Add music sheet, Google Drive picks and Drive links,
-// the music server browser, Save offline, and the import bar: one strip at the top of the screen (above the
-// toasts) that shows an import or download while it runs ("Importing from Google Drive · 3 of 8 · 12 of 40 MB",
-// a progress line) with Cancel. It also keeps the download progress of music-server songs that are loading on a
-// deck, for the deck chips and the player page.
+// Song sources in the app UI (docs/SOURCES.md section 4): the Add music sheet, Google Drive picks and Drive links
+// (a link that leads to songs is saved on this device, src/sources/drive-links.js, and can be imported again with
+// importSavedLink), the music server browser, Save offline, and the import bar: one strip at the top of the
+// screen (above the toasts) that shows an import or download while it runs ("Importing from Google Drive · 3 of
+// 8 · 12 of 40 MB", a progress line) with Cancel. It also keeps the download progress of music-server songs that
+// are loading on a deck, for the deck chips and the player page.
 //   const src = new SourcesUI(app);  src.bind();  src.openAddMusic();  src.pickDrive();  // inside a tap
 // The sources themselves (src/sources/gdrive.js, subsonic.js) are UI-agnostic; this only calls their documented
 // methods and listens to their events. Without them (an older build) the Add music sheet explains instead.
@@ -11,7 +12,8 @@ import { h, icon, setText, setAttr } from './dom.js';
 import { addMusicSheet } from './sheets/add-music-sheet.js';
 import { ServerBrowser } from './server-browser.js';
 import {
-  progressOf, progressFraction, progressLine, errText, isAbort, countWord, serverLabel, needsDownload,
+  progressOf, progressFraction, progressLine, errText, isAbort, countWord, serverLabel, needsDownload, savedLinkName,
+  linkResultText,
 } from './sources-text.js';
 import { songTitle } from './format.js';
 import { config } from '../core/env.js';
@@ -227,9 +229,13 @@ export class SourcesUI {
 
   /**
    * Import a public Google Drive song / folder link. Returns { error } for a link that is not a Drive link (the
-   * sheet shows it), else { ok: true } and the import runs with the bar.
+   * sheet shows it), else { ok: true } and the import runs with the bar. As soon as Google Drive says the link
+   * leads to songs (importLink's onInfo), the link is saved on this device (Saved links), also when every song
+   * is already in the library; a link that fails before that (not found, not shared) is not saved.
+   * @param {string} url
+   * @param {{ saved?: object }} [opts] `saved`: the saved link being imported again (its name goes on the bar)
    */
-  importDriveLink(url) {
+  importDriveLink(url, { saved = null } = {}) {
     const text = String(url || '').trim();
     const g = this.gdrive;
     if (!text) return { error: 'Paste the link first.' };
@@ -245,22 +251,114 @@ export class SourcesUI {
     }
     if (this.job) return { error: 'Another import is still running. Wait for it, or cancel it.' };
     const ctrl = makeCtrl();
+    let info = null;
+    const onInfo = (i) => {
+      if (!i || ctrl.signal.aborted) return;
+      info = i;
+      this._rememberLink(i);
+    };
     let p;
     try {
-      p = g.importLink(text, { signal: ctrl.signal });
+      p = g.importLink(text, { signal: ctrl.signal, onInfo });
     } catch (err) {
       p = Promise.reject(err);
     }
+    const name = saved ? savedLinkName(saved) : '';
+    const folder = parsed.kind === 'folder';
     this._run('link', ctrl, p, {
       showNow: true,
-      detail: parsed.kind === 'folder' ? 'Looking in the folder…' : 'Getting the song…',
+      detail: name ? (folder ? `Looking in “${name}”…` : `Getting “${name}”…`) : folder ? 'Looking in the folder…' : 'Getting the song…',
       fallback: "That link couldn't be opened. Check that it is shared with “Anyone with the link”.",
+      onFiles: (list) => this._addLinkFiles(list, info || { kind: parsed.kind, name: saved ? saved.name : '' }),
     });
     return { ok: true };
   }
 
+  /** The saved Google Drive links (SavedDriveLinks), or null when this build has none. */
+  get driveLinks() {
+    const s = (this.app.sources && this.app.sources.driveLinks) || null;
+    return s && typeof s.list === 'function' ? s : null;
+  }
+
+  /** The saved links, newest used first ([] without the store). */
+  savedLinks() {
+    const store = this.driveLinks;
+    try {
+      return store ? store.list() : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Import a saved link again (Saved links > Import again, the quick rows in Add music): the same import as
+   * pasting it, with the bar and Cancel. Returns { ok: true } or { error } like importDriveLink().
+   */
+  importSavedLink(id) {
+    const store = this.driveLinks;
+    let link = null;
+    try {
+      link = store ? store.get(id) : null;
+    } catch {
+      link = null;
+    }
+    if (!link || !link.url) return { error: 'That saved link is gone. Paste the link again.' };
+    return this.importDriveLink(link.url, { saved: link });
+  }
+
+  /** Save a link that leads to songs ({ id, kind, name, songCount, resourceKey } from importLink's onInfo). */
+  _rememberLink(info) {
+    const store = this.driveLinks;
+    if (!store) return null;
+    try {
+      return store.save({ id: info.id, kind: info.kind, name: info.name, songCount: info.songCount, resourceKey: info.resourceKey });
+    } catch (err) {
+      console.warn('[TwinSpin] the Drive link could not be saved', err);
+      return null;
+    }
+  }
+
+  /**
+   * A link import is done: its songs go in like any import (library, set list, an empty deck), and the toast
+   * says what was new: '“Road Trip” · 3 new songs added' or '“Road Trip” · no new songs, all 9 are already in
+   * your library'. A saved link the user renamed is named their way.
+   */
+  _addLinkFiles(list, info) {
+    const lib = this.app.library;
+    const kind = info && info.kind === 'file' ? 'file' : 'folder';
+    let name = info && info.name ? String(info.name) : '';
+    try {
+      const saved = info && info.id && this.driveLinks ? this.driveLinks.get(info.id) : null;
+      if (saved && saved.name) name = saved.name;
+    } catch {
+      /* the name from Google Drive */
+    }
+    // which songs the library had before: it must be open first (init() is shared and never rejects)
+    return Promise.resolve()
+      .then(() => (lib && typeof lib.init === 'function' ? lib.init() : null))
+      .catch(() => {})
+      .then(() => {
+        const before = new Set();
+        try {
+          for (const e of (lib && lib.list()) || []) if (e && e.id) before.add(e.id);
+        } catch {
+          /* every song counts as new */
+        }
+        return this.app.addFiles(list, {
+          describe: ({ entries, queued, waiting, deck }) => {
+            const ids = new Set((entries || []).map((e) => e && e.id).filter(Boolean));
+            if (!ids.size) return ''; // the library failed: the usual words
+            let fresh = 0;
+            for (const id of ids) if (!before.has(id)) fresh++;
+            return linkResultText({ name, kind, total: ids.size, fresh, queued, waiting, deck });
+          },
+        });
+      })
+      .catch((err) => console.warn('[TwinSpin] adding the link songs failed', err));
+  }
+
   /** Track an import: progress in the bar, the files into the library (+ set list, + an empty deck) when done. */
-  _run(kind, ctrl, promise, { showNow, detail = '', fallback }) {
+  _run(kind, ctrl, promise, { showNow, detail = '', fallback, onFiles = null }) {
     const job = { kind, ctrl, cancelled: false, shown: false, errorAt: 0, p: null };
     this.job = job;
     if (showNow) this._showBar(TITLES[kind] || TITLES.gdrive, detail, null);
@@ -272,9 +370,11 @@ export class SourcesUI {
         if (!job.cancelled && kind === 'link' && Date.now() - job.errorAt > 2000) {
           this.app.toast('No songs found behind that link.', { kind: 'error' });
         }
-        return;
+        return undefined;
       }
+      if (onFiles) return onFiles(list);
       this.app.addFiles(list);
+      return undefined;
     }, (err) => {
       this._endJob(job);
       if (job.cancelled || isAbort(err)) return;

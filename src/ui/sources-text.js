@@ -2,7 +2,7 @@
 // small cloud / server badge), import and download progress lines, the "Other ways" hints for each platform,
 // the music-server address hint, and readers that turn Subsonic / OpenSubsonic answers (whole JSON responses,
 // the inner 'subsonic-response' object, or the part a client already unwrapped) into plain lists for the music
-// server browser. docs/SOURCES.md sections 3-4.
+// server browser, and the saved Google Drive links (their lines, the import result). docs/SOURCES.md sections 3-4.
 //   remoteKind(entry) === 'server';  progressLine({ done: 2, total: 8, bytes, totalBytes })
 //   listAlbums(await client.getAlbumList2('newest', 40, 0))   // [{ id, name, artist, coverArt, ... }]
 
@@ -393,4 +393,69 @@ export function serverKind(server) {
   if (type) return [type, product].filter(Boolean).join(' ');
   const api = str(server.version).trim();
   return api ? `Subsonic API ${api}` : '';
+}
+
+// ---- saved Google Drive links -----------------------------------------------------------------------------------
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** A day as a short local date: 'today', 'yesterday', '16 Oct' (this year), '16 Oct 2025'; '' for no date. */
+export function shortDate(t, now = Date.now()) {
+  if (!(Number(t) > 0)) return '';
+  const d = new Date(Number(t));
+  const n = new Date(now);
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const ago = Math.round((day(n) - day(d)) / 86400000); // rounding absorbs a 23 / 25 hour day
+  if (ago === 0) return 'today';
+  if (ago === 1) return 'yesterday';
+  const s = `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+  return d.getFullYear() === n.getFullYear() ? s : `${s} ${d.getFullYear()}`;
+}
+
+/** The name a saved link shows: its own, else 'Google Drive folder' / 'Google Drive song'. */
+export function savedLinkName(link) {
+  const name = link && typeof link.name === 'string' ? link.name.trim() : '';
+  if (name) return name;
+  return link && link.kind === 'file' ? 'Google Drive song' : 'Google Drive folder';
+}
+
+/**
+ * A saved link's second line: '9 songs · imported 16 Oct', 'Song · imported today'; `short` drops 'imported'
+ * ('9 songs · 16 Oct') for the quick rows in Add music.
+ */
+export function savedLinkMeta(link, now = Date.now(), { short = false } = {}) {
+  if (!link) return '';
+  const what = link.kind === 'file' ? 'Song' : link.songCount > 0 ? countWord(link.songCount, 'song') : 'Folder';
+  const when = shortDate(link.lastImportedAt, now);
+  if (!when) return what;
+  return `${what} · ${short ? when : `imported ${when}`}`;
+}
+
+/**
+ * The toast after a Google Drive link import: what was new in the library, then how many songs went into the
+ * set list (the queue) and the deck the first one loads on.
+ *   '“Road Trip” · 3 new songs added · 9 queued'
+ *   '“Road Trip” · no new songs, all 9 are already in your library · 9 queued, loading on deck A'
+ *   '“Midnight” · added to your songs · queued'
+ *   '“Road Trip” · no new songs, all 9 are already in your library · all already in the set list'
+ * @param {{ name?: string, kind?: 'folder'|'file', total?: number, fresh?: number, queued?: number,
+ *   waiting?: number, deck?: number }} r
+ *   `total` songs came back, `fresh` of them were not in the library before, `queued` went into the set list,
+ *   `waiting` were not queued again because they still wait in the set list, `deck` 0 / 1 for deck A / B (-1 = none)
+ */
+export function linkResultText({ name = '', kind = 'folder', total = 0, fresh = 0, queued = 0, waiting = 0,
+  deck = -1 } = {}) {
+  const label = name ? `“${name}”` : kind === 'file' ? 'The song' : 'The folder';
+  let what;
+  if (kind === 'file' && total <= 1) what = fresh > 0 ? 'added to your songs' : 'already in your library';
+  else if (fresh > 0) what = `${countWord(fresh, 'new song')} added`;
+  else if (total <= 1) what = 'no new songs, it is already in your library';
+  else what = `no new songs, all ${total} are already in your library`;
+  const parts = [label, what];
+  if (queued > 0) parts.push(queued === 1 ? 'queued' : `${queued} queued`);
+  if (waiting > 0) {
+    parts.push(queued > 0 ? `${waiting} already in the set list`
+      : waiting === 1 && total <= 1 ? 'already in the set list' : 'all already in the set list');
+  }
+  return parts.join(' · ') + (deck >= 0 ? `, loading on deck ${deck ? 'B' : 'A'}` : '');
 }

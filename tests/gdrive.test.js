@@ -2,7 +2,8 @@
 // preloading (and its failure / retry), the GIS token flow (requestAccessToken called synchronously inside pick(),
 // prompt 'consent' then '', popup blocked / closed, scopes not granted, expiry, sign-out), the Picker configuration
 // and callback, downloads with progress (2 at a time, Content-Length or not), File objects, public link imports
-// (file, folder with paging, resource keys, the 60-song limit), plain-words errors, cancel, and library dedupe.
+// (file, folder with paging, resource keys, the 60-song limit), plain-words errors, cancel, library dedupe, and
+// importLink's onInfo (what a saved link records: kind, name, songs found; only for links that lead to songs).
 import {
   AUDIO_MIME_TYPES, DRIVE_SCOPE, GAPI_URL, GSI_URL, GoogleDriveSource, MSG, PICKER_CSS, PICKER_MAX_ITEMS,
   parseDriveUrl,
@@ -725,4 +726,91 @@ test('importLink errors in plain words: not shared, not found, API key, quota, e
   ctl.abort();
   assert.deepEqual(await p, []);
   assert.equal(d.busy, false);
+});
+
+test('importLink onInfo: what the link is (folder or song, name, songs found before the limit), before any download', async () => {
+  const world = googleWorld();
+  const infos = [];
+  const media = {};
+  const list = [];
+  for (let i = 0; i < LIBRARY_CAP + 4; i++) {
+    const id = `1song_${String(i).padStart(4, '0')}_xxxxxxxxxx`;
+    media[id] = bytesOf(20);
+    list.push({ id, name: `${String(i).padStart(2, '0')} Song.mp3`, mimeType: 'audio/mpeg', size: '20' });
+  }
+  list.push({ id: '1notsong_0000_xxxxxxxx', name: 'notes.txt', mimeType: 'text/plain' });
+  const api = driveApi({
+    media: { ...media, [ID1]: bytesOf(64), [ID2]: bytesOf(32) },
+    meta: {
+      [FOLDER]: { id: FOLDER, name: '  Party  ', mimeType: 'application/vnd.google-apps.folder', resourceKey: '0-FK' },
+      [ID1]: { id: ID1, name: 'Artist - Shared Song.flac', mimeType: 'audio/flac', size: '64' },
+    },
+    pages: [{ files: list }],
+  });
+  const onInfo = (info) => infos.push({ info, downloads: api.calls.filter((x) => x.url.includes('alt=media')).length });
+  // a folder: the songs found before the 60-song limit, the folder's name, its resource key
+  const files = await makeDrive(world, api).importLink(`https://drive.google.com/drive/folders/${FOLDER}?resourcekey=0-FK`, { onInfo });
+  assert.equal(files.length, LIBRARY_CAP);
+  assert.equal(infos.length, 1, 'once');
+  assert.deepEqual(infos[0].info, { id: FOLDER, kind: 'folder', name: 'Party', songCount: LIBRARY_CAP + 4, resourceKey: '0-FK' });
+  assert.equal(infos[0].downloads, 0, 'before the downloads');
+  // a song: its file name without the extension, one song, the link's resource key
+  infos.length = 0;
+  const one = await makeDrive(world, api).importLink(`https://drive.google.com/file/d/${ID1}/view?resourcekey=0-RK`, { onInfo });
+  assert.equal(one.length, 1);
+  assert.deepEqual(infos.map((x) => x.info), [{ id: ID1, kind: 'file', name: 'Artist - Shared Song', songCount: 1, resourceKey: '0-RK' }]);
+  assert.equal(infos[0].downloads, LIBRARY_CAP, 'the song itself was not downloaded yet');
+  // a shortcut: the target; a file link that is really a folder: kind folder; a name without an extension stays
+  const sc = driveApi({
+    media: { [ID2]: bytesOf(50) },
+    meta: {
+      [ID1]: { id: ID1, name: 'Shortcut', mimeType: 'application/vnd.google-apps.shortcut', shortcutDetails: { targetId: ID2 } },
+      [ID2]: { id: ID2, name: 'Target', mimeType: 'audio/mpeg', size: '50' },
+      [FOLDER]: { id: FOLDER, name: 'Mixes', mimeType: 'application/vnd.google-apps.folder' },
+    },
+    pages: [{ files: [{ id: ID2, name: 'Target', mimeType: 'audio/mpeg', size: '50' }] }],
+  });
+  infos.length = 0;
+  await makeDrive(world, sc).importLink(`https://drive.google.com/open?id=${ID1}`, { onInfo });
+  await makeDrive(world, sc).importLink(`https://drive.google.com/file/d/${FOLDER}/view`, { onInfo });
+  assert.deepEqual(infos.map((x) => x.info), [
+    { id: ID2, kind: 'file', name: 'Target', songCount: 1, resourceKey: '' },
+    { id: FOLDER, kind: 'folder', name: 'Mixes', songCount: 1, resourceKey: '' },
+  ]);
+  // a link that does not lead to songs is never reported (so it is never saved)
+  infos.length = 0;
+  const link = `https://drive.google.com/file/d/${ID1}/view`;
+  const folderLink = `https://drive.google.com/drive/folders/${FOLDER}`;
+  const run = (opts) => makeDrive(world, driveApi(opts));
+  await assert.rejects(run({}).importLink(link, { onInfo }), (err) => err.code === 'not-found');
+  await assert.rejects(run({ fail: { [`meta:${ID1}`]: () => driveError(403, 'forbidden', 'no') } }).importLink(link, { onInfo }),
+    (err) => err.code === 'forbidden');
+  await assert.rejects(run({ meta: { [FOLDER]: { id: FOLDER, mimeType: 'application/vnd.google-apps.folder' } }, pages: [{ files: [] }] })
+    .importLink(folderLink, { onInfo }), (err) => err.code === 'empty-folder');
+  await assert.rejects(run({ meta: { [ID1]: { id: ID1, name: 'Doc', mimeType: 'application/vnd.google-apps.document' } } })
+    .importLink(link, { onInfo }), (err) => err.code === 'not-audio');
+  await assert.rejects(run({ fail: { network: true } }).importLink(link, { onInfo }), (err) => err.code === 'network');
+  await assert.rejects(run({}).importLink('https://example.com/x', { onInfo }), (err) => err.code === 'bad-link');
+  const ctl = makeAbort();
+  const slowApi = driveApi({ meta: { [FOLDER]: { id: FOLDER, mimeType: 'application/vnd.google-apps.folder' } },
+    pages: [{ files: [{ id: ID2, name: 'x.mp3', mimeType: 'audio/mpeg' }] }] });
+  const slow = makeDrive(world, { fetch: async (...args) => {
+    await sleep(50);
+    return slowApi.fetch(...args);
+  } });
+  const p = slow.importLink(folderLink, { signal: ctl.signal, onInfo });
+  await sleep(70);
+  ctl.abort();
+  assert.deepEqual(await p, []);
+  assert.deepEqual(infos, [], 'not reported for a failed or cancelled link');
+  // a song link whose download fails later is a working link: reported, then the import says why
+  const meta = { [ID1]: { id: ID1, name: 'Song.mp3', mimeType: 'audio/mpeg' } };
+  await assert.rejects(run({ meta, fail: { [ID1]: () => new Response('slow down', { status: 429 }) } }).importLink(link, { onInfo }),
+    (err) => err.code === 'quota');
+  assert.deepEqual(infos.map((x) => x.info.name), ['Song']);
+  // a failing onInfo does not stop the import
+  const songs = await makeDrive(world, api).importLink(`https://drive.google.com/file/d/${ID1}/view`, { onInfo: () => {
+    throw new Error('listener broke');
+  } });
+  assert.equal(songs.length, 1);
 });

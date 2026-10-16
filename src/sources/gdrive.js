@@ -6,6 +6,7 @@
 //   drive.preload().catch(() => {});                            // when the Add music sheet opens
 //   button.onclick = () => drive.pick().then((files) => library.add(files, { source: 'gdrive' }));  // IN the tap
 //   await drive.importLink('https://drive.google.com/drive/folders/…');   // public link: API key only, no sign-in
+//   drive.importLink(url, { signal, onInfo: ({ id, kind, name, songCount }) => links.save(...) });  // saved links
 //   drive.on('progress', ({ done, total, bytes, totalBytes, name }) => ...);  drive.cancel();  drive.signOut();
 // pick() / importLink() reject with an Error whose message is plain words for the user (and a `code`); a cancel
 // (popup closed, Picker cancelled, cancel(), the signal) resolves with the files finished so far ([] usually).
@@ -596,11 +597,15 @@ export class GoogleDriveSource extends Emitter {
    * LIBRARY_CAP), with the API key only: no sign-in. Resolves with File objects ([] when cancelled); rejects
    * with a readable Error (code 'bad-link', 'not-configured', 'forbidden', 'not-found', 'not-audio',
    * 'empty-folder', 'quota', 'network', 'busy', ...).
+   * `onInfo` is called once, after the metadata (and the folder listing) and before the downloads, only when the
+   * link leads to songs: { id, kind: 'folder'|'file', name, songCount, resourceKey } with the folder's name or the
+   * song's file name without its extension, and the number of songs found (before the LIBRARY_CAP limit). `id` /
+   * `kind` are the real target (a shortcut's target, a file link that is a folder). The UI saves the link with it.
    * @param {string} url
-   * @param {{ signal?: AbortSignal }} [opts]
+   * @param {{ signal?: AbortSignal, onInfo?: (info: object) => void }} [opts]
    * @returns {Promise<File[]>}
    */
-  async importLink(url, { signal } = {}) {
+  async importLink(url, { signal, onInfo } = {}) {
     const ref = parseDriveUrl(url);
     if (!ref) throw sourceError('bad-link', MSG.badLink);
     if (!this._cfg.apiKey) throw sourceError('not-configured', MSG.linkNotConfigured);
@@ -613,15 +618,26 @@ export class GoogleDriveSource extends Emitter {
         meta = docOrMeta(await this._getMeta(meta.targetId, '', op), meta.targetId);
       }
       let docs;
+      let info;
       if (meta.mimeType === FOLDER_MIME) {
         const rk = meta.id === ref.id ? ref.resourceKey || meta.resourceKey : meta.resourceKey;
         docs = await this._listFolder(meta.id, rk, op);
         docs = docs.filter((d) => looksLikeAudio({ type: d.mimeType, name: d.name }));
         if (!docs.length) throw sourceError('empty-folder', MSG.emptyFolder);
+        info = { id: meta.id, kind: 'folder', name: str(meta.name), songCount: docs.length, resourceKey: rk || '' };
       } else {
         const d = docOf(meta);
         if (d && !d.resourceKey && ref.resourceKey) d.resourceKey = ref.resourceKey;
         docs = d ? [d] : [];
+        // not a song: no info (the download step below rejects with 'not-audio')
+        if (d && isSong(d)) info = { id: d.id, kind: 'file', name: baseName(d.name), songCount: 1, resourceKey: d.resourceKey };
+      }
+      if (info && typeof onInfo === 'function' && !op.cancelled) {
+        try {
+          onInfo(info);
+        } catch (err) {
+          console.warn('[TwinSpin] Drive link onInfo failed', err);
+        }
       }
       const found = docs.length;
       if (found > LIBRARY_CAP) docs = docs.slice(0, LIBRARY_CAP);
@@ -767,7 +783,7 @@ export class GoogleDriveSource extends Emitter {
     let notSongs = 0;
     for (const d of rawDocs) {
       if (!d || !d.id || d.mimeType === FOLDER_MIME) continue;
-      if (/^application\/vnd\.google-apps\./.test(d.mimeType) || !looksLikeAudio({ type: d.mimeType, name: d.name })) {
+      if (!isSong(d)) {
         notSongs++;
         continue;
       }
@@ -863,6 +879,17 @@ export class GoogleDriveSource extends Emitter {
     const file = makeFile(parts, safeFileName(d.name), { type, lastModified: d.lastEditedUtc });
     return attachRemote(file, d);
   }
+}
+
+/** A Drive document that is a song (not a Google Docs file, an audio type or an audio file name). */
+function isSong(d) {
+  return !/^application\/vnd\.google-apps\./.test(d.mimeType) && looksLikeAudio({ type: d.mimeType, name: d.name });
+}
+
+/** 'Artist - Song.mp3' -> 'Artist - Song' (the name a saved link shows). */
+function baseName(name) {
+  const s = str(name);
+  return s.replace(/\.[A-Za-z0-9]{1,5}$/, '') || s;
 }
 
 /** A files.get answer with the shortcut target pulled up ({ ..., targetId }); `id` defaults to the asked one. */

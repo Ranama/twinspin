@@ -106,8 +106,9 @@ export function collectDiagnostics(app) {
 }
 
 /**
- * Song sources for the diagnostics block (never throws): whether Google Drive is set up / loaded, and the music
- * server's kind and status (never its address, user or sign-in key: the block may be shared).
+ * Song sources for the diagnostics block (never throws): whether Google Drive is set up / loaded, the music
+ * server's kind and status (never its address, user or sign-in key: the block may be shared) and how many
+ * Drive links are saved.
  */
 function sourcesInfo(app) {
   const src = app.sources || {};
@@ -129,6 +130,9 @@ function sourcesInfo(app) {
       out.remoteSongs = all.filter((e) => e && e.source === 'subsonic').length;
       out.driveSongs = all.filter((e) => e && e.source === 'gdrive').length;
     }
+    // how many Drive links are saved (never the links or their names)
+    const links = src.driveLinks;
+    if (links && typeof links.list === 'function') out.savedDriveLinks = links.list().length;
   } catch {
     /* partial info is fine */
   }

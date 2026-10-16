@@ -21,7 +21,8 @@ before loading your own music.
 * **Two spinning record decks** you can scratch, with PLAY, CUE (CDJ style) and one-tap **SYNC** (tempo and beat)
 * **Your own music**: MP3, M4A/AAC, WAV, FLAC and more, straight from the device. Nothing is uploaded.
 * **Google Drive and your NAS**: **Add music** brings songs in from this device, from **Google Drive** (Google's
-  own sign-in and picker; TwinSpin only sees the songs you pick), from a shared **Drive link**, or from your
+  own sign-in and picker; TwinSpin only sees the songs you pick), from a shared **Drive link** (remembered on
+  this device under **Saved links**, so you can import it again with one tap), or from your
   **music server** (Navidrome or another Subsonic server, for example on a Synology NAS): browse artists, albums,
   playlists and search with cover art, play or queue songs, load them on a deck, **Save offline** for a set
   without Wi-Fi. Setup guides: [Google Drive](docs/GOOGLE_DRIVE.md), [Synology NAS](docs/SYNOLOGY.md); the phone's

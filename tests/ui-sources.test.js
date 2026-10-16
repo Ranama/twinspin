@@ -7,7 +7,11 @@
 // never stored or sent), the browser (Albums / Artists / Playlists / Search, album / artist / playlist pages,
 // song actions Play now / Play next / Add to queue / Load on deck A / B / Save offline, Add all, Save offline for
 // an album), source badges on the Songs page, the deck chip and the player while a server song downloads,
-// Settings (Music server, Google Drive), Help, the menu, all four layouts, and a clean error log.
+// Settings (Music server, Google Drive), Help, the menu, all four layouts, saved Drive links (saved through
+// onInfo after a link import, failed links not saved, the quick rows in Add music, the Saved links cards with
+// Import again / Copy link / Rename / Remove / Forget all, the result toasts; end to end with the real
+// GoogleDriveSource on a stubbed Drive API: Import again downloads nothing, keeps the resource key, the 60-song
+// notice, blocked storage), and a clean error log.
 
 import * as T from '../src/ui/sources-text.js';
 import { installFakeDom, FakeEvent, Element, FakeDocument } from './helpers/fake-dom.js';
@@ -156,14 +160,52 @@ test('errors in plain words, cancels recognised', () => {
   assert.equal(T.isAbort(new Error('x')), false);
 });
 
+test('saved Drive links in words: dates, names, lines, the import result', () => {
+  const now = new Date(2026, 9, 16, 15, 30).getTime(); // 16 Oct 2026, local time
+  assert.equal(T.shortDate(now - 3600e3, now), 'today');
+  assert.equal(T.shortDate(new Date(2026, 9, 15, 23, 59).getTime(), now), 'yesterday');
+  assert.equal(T.shortDate(new Date(2026, 9, 2, 8).getTime(), now), '2 Oct');
+  assert.equal(T.shortDate(new Date(2025, 11, 31).getTime(), now), '31 Dec 2025');
+  assert.equal(T.shortDate(0, now), '');
+  assert.equal(T.savedLinkName({ kind: 'folder', name: ' Road Trip ' }), 'Road Trip');
+  assert.equal(T.savedLinkName({ kind: 'folder', name: '' }), 'Google Drive folder');
+  assert.equal(T.savedLinkName({ kind: 'file' }), 'Google Drive song');
+  const folder = { kind: 'folder', songCount: 9, lastImportedAt: new Date(2026, 9, 2).getTime() };
+  assert.equal(T.savedLinkMeta(folder, now), '9 songs · imported 2 Oct');
+  assert.equal(T.savedLinkMeta(folder, now, { short: true }), '9 songs · 2 Oct');
+  assert.equal(T.savedLinkMeta({ kind: 'folder', songCount: 1, lastImportedAt: now }, now), '1 song · imported today');
+  assert.equal(T.savedLinkMeta({ kind: 'file', songCount: 1, lastImportedAt: now }, now), 'Song · imported today');
+  assert.equal(T.savedLinkMeta({ kind: 'folder', songCount: 0 }, now), 'Folder');
+  assert.equal(T.savedLinkMeta(null), '');
+  // the toast after a link import: what was new, then the set list and the deck
+  assert.equal(T.linkResultText({ name: 'Road Trip', total: 9, fresh: 3 }), '“Road Trip” · 3 new songs added');
+  assert.equal(T.linkResultText({ name: 'Road Trip', total: 9, fresh: 0 }), '“Road Trip” · no new songs, all 9 are already in your library');
+  assert.equal(T.linkResultText({ name: 'Road Trip', total: 9, fresh: 1, queued: 9, deck: 1 }),
+    '“Road Trip” · 1 new song added · 9 queued, loading on deck B');
+  assert.equal(T.linkResultText({ name: 'Solo', total: 1, fresh: 0 }), '“Solo” · no new songs, it is already in your library');
+  assert.equal(T.linkResultText({ name: 'Midnight', kind: 'file', total: 1, fresh: 1, queued: 1, deck: 0 }),
+    '“Midnight” · added to your songs · queued, loading on deck A');
+  assert.equal(T.linkResultText({ kind: 'file', total: 1, fresh: 0 }), 'The song · already in your library');
+  assert.equal(T.linkResultText({ total: 4, fresh: 4 }), 'The folder · 4 new songs added');
+  // songs still waiting in the set list are not queued twice
+  assert.equal(T.linkResultText({ name: 'Road Trip', total: 9, fresh: 0, queued: 0, waiting: 9 }),
+    '“Road Trip” · no new songs, all 9 are already in your library · all already in the set list');
+  assert.equal(T.linkResultText({ name: 'Road Trip', total: 9, fresh: 2, queued: 3, waiting: 6 }),
+    '“Road Trip” · 2 new songs added · 3 queued · 6 already in the set list');
+  assert.equal(T.linkResultText({ name: 'Midnight', kind: 'file', total: 1, fresh: 0, waiting: 1 }),
+    '“Midnight” · already in your library · already in the set list');
+});
+
 // ---------------------------------------------------------------------------------------------------------
 // The app shell
 
 installFakeDom();
 const { Settings } = await import('../src/core/settings.js');
 const { Playlist } = await import('../src/deck/playlist.js');
-const { Library } = await import('../src/library/library.js');
+const { Library, LIBRARY_CAP } = await import('../src/library/library.js');
 const { MusicServerSource } = await import('../src/sources/subsonic.js');
+const { SavedDriveLinks } = await import('../src/sources/drive-links.js');
+const { GoogleDriveSource } = await import('../src/sources/gdrive.js');
 const { AppUI } = await import('../src/ui/app-ui.js');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -350,7 +392,7 @@ class FakePlayer extends Emitter {
   }
 }
 
-function makeApp(w, h, { drive = null, server = 'fixture', fetchLog = [], fetchFn = null } = {}) {
+function makeApp(w, h, { drive = null, server = 'fixture', fetchLog = [], fetchFn = null, links = undefined } = {}) {
   G.innerWidth = w;
   G.innerHeight = h;
   G.document = new FakeDocument();
@@ -371,10 +413,13 @@ function makeApp(w, h, { drive = null, server = 'fixture', fetchLog = [], fetchF
   const srv = server === 'fixture'
     ? new MusicServerSource({ settings, library, fetch: fetchFn || fixtureFetch(fetchLog), local, session, location: { protocol: 'http:' } })
     : server;
+  // saved Drive links: each app its own store in memory (no window 'storage' events)
+  const driveLinks = links === undefined ? new SavedDriveLinks({ storage: memStore(), events: null }) : links;
   const ui = new AppUI({ root, engine, decks, sync, settings, library, playlist, automix, player,
-    sources: { gdrive: drive, server: srv } });
+    sources: { gdrive: drive, server: srv, driveLinks } });
   library.init();
-  return { root, settings, engine, decks, sync, library, playlist, automix, player, ui, drive, server: srv, fetchLog, local, session };
+  return { root, settings, engine, decks, sync, library, playlist, automix, player, ui, drive, server: srv, fetchLog, local,
+    session, links: driveLinks };
 }
 
 async function startAudio(app) {
@@ -967,6 +1012,407 @@ test('Settings > Google Drive, Help, the menu, the player empty state and all la
     assert.equal($$(sheetOf(a), '.sb-card').length, 4, `${w}x${h}`);
     a.ui.destroy();
   }
+});
+
+const ROAD = '0BwwA4oUTeiV1TGRPeTVjaWRDY1E';
+const SONG = '1MidnightSignal_000000000';
+const roadSong = (i) => fakeFile(`Road ${i}.mp3`, { remote: { kind: 'gdrive', fileId: `roadTripFile${i}000` } });
+
+/** Paste a link into the open Google Drive link sheet and send it. */
+function pasteLink(app, url) {
+  const sheet = sheetOf(app);
+  type($(sheet, '[id=drive-link-input]'), url);
+  submit($(sheet, '.src-form'));
+}
+
+test('saved Drive links: saved after an import (also with nothing new), failed links not saved, Import again', async () => {
+  const drive = new FakeDrive();
+  const app = makeApp(360, 560, { drive });
+  const { links, library, playlist } = app;
+  await startAudio(app);
+  const bar = $(app.root, '.import-bar');
+  // nothing saved yet: no quick rows in Add music, no Saved links section
+  app.ui.openAddMusic();
+  assert.equal($(sheetOf(app), '.add-saved').hidden, true);
+  $(sheetOf(app), '.add-link').click();
+  assert.equal($(sheetOf(app), '.dl-saved').hidden, true);
+  // a folder link: Google Drive says what it is (onInfo) and the link is saved right then
+  pasteLink(app, `https://drive.google.com/drive/folders/${ROAD}?usp=sharing`);
+  assert.equal(drive.count('importLink'), 1);
+  const opts = drive.pending.args[1];
+  assert.equal(typeof opts.onInfo, 'function');
+  assert.equal(links.size, 0, 'nothing saved before Google Drive answers');
+  opts.onInfo({ id: ROAD, kind: 'folder', name: 'Road Trip', songCount: 3, resourceKey: '' });
+  assert.equal(links.size, 1);
+  const saved = links.get(ROAD);
+  assert.equal(saved.url, `https://drive.google.com/drive/folders/${ROAD}`, 'the clean link, without ?usp=sharing');
+  assert.equal(saved.name, 'Road Trip');
+  assert.equal(saved.songCount, 3);
+  drive.pending.resolve([roadSong(1), roadSong(2), roadSong(3)]);
+  await sleep(80);
+  assert.equal(bar.hidden, true);
+  assert.match(toastsOf(app), /“Road Trip” · 3 new songs added · 3 queued, loading on deck A/);
+  assert.equal(library.list().filter((e) => !e.demo).length, 3);
+  assert.equal(playlist.items.length, 3);
+  // Add music now offers it right under "Paste a Google Drive link"
+  app.ui.openAddMusic();
+  let sheet = sheetOf(app);
+  const quick = $(sheet, '.add-saved');
+  assert.equal(quick.hidden, false);
+  let rows = $$(quick, '.add-saved-row');
+  assert.equal(rows.length, 1);
+  assert.equal(textOf($(rows[0], '.add-saved-name')), 'Road Trip');
+  assert.equal(textOf($(rows[0], '.add-saved-meta')), '3 songs · today');
+  assert.equal(textOf($(quick, '.add-saved-all')).trim(), 'All saved links (1)');
+  // Import: the same import as pasting it (bar, its name on the bar), the sheet makes way
+  $(rows[0], '.add-saved-go').click();
+  assert.equal($(app.root, '.sheet-layer').hidden, true);
+  assert.equal(drive.count('importLink'), 2);
+  assert.equal(drive.pending.args[0], `https://drive.google.com/drive/folders/${ROAD}`);
+  await sleep(40);
+  assert.equal(bar.hidden, false);
+  assert.equal(textOf($(bar, '.ib-title')), 'Importing a Google Drive link');
+  assert.equal(textOf($(bar, '.ib-detail')), 'Looking in “Road Trip”…');
+  // every song is already in the library: the link is still saved (used again), and the toast says so
+  drive.pending.args[1].onInfo({ id: ROAD, kind: 'folder', name: 'Road Trip', songCount: 3, resourceKey: '' });
+  drive.pending.resolve([roadSong(1), roadSong(2), roadSong(3)]);
+  await sleep(80);
+  assert.match(toastsOf(app), /“Road Trip” · no new songs, all 3 are already in your library · all already in the set list/); // still waiting in the set list: not queued twice
+  assert.equal(library.list().filter((e) => !e.demo).length, 3, 'nothing new in the library');
+  assert.equal(links.size, 1, 'still one saved link');
+  // a link that fails (not found) is not saved
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-link').click();
+  pasteLink(app, 'https://drive.google.com/file/d/1GoneGoneGoneGone000000/view');
+  drive.pending.reject(Object.assign(new Error("That file or folder wasn't found. Check the link, and that it is shared with “Anyone with the link”."),
+    { code: 'not-found' }));
+  await sleep(40);
+  assert.match(toastsOf(app), /wasn't found/);
+  // not a Drive link at all: the sheet says so, nothing starts or is saved
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-link').click();
+  pasteLink(app, 'https://example.com/folders/1AbCdEfGhIjKlMn');
+  assert.match(textOf($(sheetOf(app), '.src-error')), /not a Google Drive link/);
+  assert.equal(drive.count('importLink'), 3);
+  assert.deepEqual(links.list().map((l) => l.id), [ROAD], 'failed links are not saved');
+  app.ui.sheets.close();
+  // a song link: saved with the song's name, at the top (newest used first)
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-link').click();
+  pasteLink(app, `https://drive.google.com/file/d/${SONG}/view?usp=drive_link&resourcekey=0-RK`);
+  drive.pending.args[1].onInfo({ id: SONG, kind: 'file', name: 'Midnight Signal', songCount: 1, resourceKey: '0-RK' });
+  drive.pending.resolve([fakeFile('Midnight Signal.mp3', { remote: { kind: 'gdrive', fileId: SONG } })]);
+  await sleep(80);
+  assert.match(toastsOf(app), /“Midnight Signal” · added to your songs · queued/);
+  assert.deepEqual(links.list().map((l) => l.id), [SONG, ROAD]);
+  assert.equal(links.get(SONG).url, `https://drive.google.com/file/d/${SONG}/view?resourcekey=0-RK`);
+  // a saved import cancelled before Google Drive answered: the bar's Cancel works, nothing more is saved
+  app.ui.openAddMusic();
+  rows = $$(sheetOf(app), '.add-saved-row');
+  assert.deepEqual(rows.map((r) => textOf($(r, '.add-saved-name'))), ['Midnight Signal', 'Road Trip']);
+  $(rows[1], '.add-saved-go').click();
+  await sleep(40);
+  const late = drive.pending;
+  $(bar, '.ib-cancel').click();
+  assert.equal(bar.hidden, true);
+  assert.match(toastsOf(app), /Import cancelled/);
+  late.args[1].onInfo({ id: '1SomethingElse_000000000', kind: 'folder', name: 'Late', songCount: 2 });
+  late.resolve([]);
+  await sleep(40);
+  assert.equal(links.size, 2, 'an answer after Cancel is not saved');
+  // diagnostics: how many, never the links or names
+  const diag = app.ui.diagnostics();
+  assert.equal(diag.sources.savedDriveLinks, 2);
+  assert(!/Road Trip|Midnight|drive\.google/.test(JSON.stringify(diag.sources)));
+  sheet = null;
+  app.ui.destroy();
+});
+
+test('Saved links sheet: cards above the paste field, Import again, Copy link, Rename, Remove, Forget all', async () => {
+  const drive = new FakeDrive();
+  const app = makeApp(360, 560, { drive });
+  const { links } = app;
+  links.save({ id: ROAD, kind: 'folder', name: 'Road Trip', songCount: 9 });
+  links.save({ id: SONG, kind: 'file', name: 'Midnight Signal', songCount: 1 });
+  await startAudio(app);
+  // Add music > All saved links (2) opens the link sheet
+  app.ui.openAddMusic();
+  assert.equal($$(sheetOf(app), '.add-saved-row').length, 2);
+  $(sheetOf(app), '.add-saved-all').click();
+  let sheet = sheetOf(app);
+  assert.equal(sheet.dataset.sheet, 'drive-link');
+  assert.equal($(sheet, '.sheet-back').hidden, false, 'Back returns to Add music');
+  const body = $(sheet, '.sheet-body');
+  assert(body.children[0].classList.contains('dl-saved'), 'Saved links come first, above the paste field');
+  assert.equal(textOf($(body.children[0], '.sheet-h')), 'Saved links');
+  assert($(body.children[1], '.src-form'));
+  let cards = $$(sheet, '.dl-row');
+  assert.deepEqual(cards.map((c) => textOf($(c, '.dl-name'))), ['Midnight Signal', 'Road Trip']);
+  assert.deepEqual(cards.map((c) => textOf($(c, '.dl-meta'))), ['Song · imported today', '9 songs · imported today']);
+  assert.deepEqual(cards.map((c) => c.dataset.kind), ['file', 'folder']);
+  assert.equal(textOf($(cards[1], '.dl-go')), 'Import again');
+  assert.equal($(cards[1], '.dl-go').getAttribute('aria-label'), 'Import “Road Trip” again');
+  // ⋯ opens Copy link / Rename / Remove for that card only
+  const road = () => $$(sheetOf(app), '.dl-row').find((c) => c.dataset.id === ROAD);
+  $(road(), '.dl-more').click();
+  assert.equal($(road(), '.dl-more').getAttribute('aria-expanded'), 'true');
+  assert.deepEqual($$(road(), '.dl-actions button').map(textOf), ['Copy link', 'Rename', 'Remove']);
+  assert.equal($$(sheetOf(app), '.dl-menu').length, 1);
+  // Copy link: the clipboard when there is one
+  const copied = [];
+  G.navigator.clipboard = { writeText: async (t) => {
+    copied.push(t);
+  } };
+  $(road(), '.dl-copy').click();
+  await sleep(10);
+  assert.deepEqual(copied, [`https://drive.google.com/drive/folders/${ROAD}`]);
+  assert.match(toastsOf(app), /Link copied/);
+  // ... else (or when it refuses) a field with the link to select and copy by hand
+  G.navigator.clipboard = { writeText: async () => {
+    throw new Error('NotAllowedError');
+  } };
+  $(road(), '.dl-copy').click();
+  await sleep(10);
+  let field = $(road(), '.dl-url');
+  assert(field, 'the select-text fallback');
+  assert.equal(field.value, `https://drive.google.com/drive/folders/${ROAD}`);
+  assert.equal(field.getAttribute('readonly'), '');
+  delete G.navigator.clipboard;
+  $(road(), '.dl-more').click(); // closes the menu
+  assert.equal($(road(), '.dl-menu'), null);
+  $(road(), '.dl-more').click();
+  $(road(), '.dl-copy').click();
+  field = $(road(), '.dl-url');
+  assert.equal(field.value, `https://drive.google.com/drive/folders/${ROAD}`);
+  assert.match(textOf($(road(), '.dl-copy-note')), /Select the link and copy it/);
+  // Rename: inline, an empty name is refused, the new name is kept
+  $(road(), '.dl-rename-btn').click();
+  const input = $(road(), '.dl-name-input');
+  assert.equal(input.value, 'Road Trip');
+  assert.equal(G.document.activeElement, input, 'the name field gets the focus');
+  type(input, '   ');
+  submit($(road(), '.dl-rename'));
+  assert.equal($(road(), '.dl-error').hidden, false);
+  assert.equal(textOf($(road(), '.dl-error')), 'Type a name.');
+  type($(road(), '.dl-name-input'), 'Car songs');
+  submit($(road(), '.dl-rename'));
+  assert.equal(links.get(ROAD).name, 'Car songs');
+  assert.equal(textOf($(road(), '.dl-name')), 'Car songs');
+  assert.equal($(road(), '.dl-name-input'), null);
+  // Cancel and Escape leave the name alone
+  $(road(), '.dl-more').click();
+  $(road(), '.dl-rename-btn').click();
+  type($(road(), '.dl-name-input'), 'Something else');
+  $(road(), '.dl-cancel').click();
+  assert.equal(links.get(ROAD).name, 'Car songs');
+  // Remove: two taps ("Remove?" first), and the first tap gives up after a moment
+  $(road(), '.dl-more').click();
+  $(road(), '.dl-rm').click();
+  assert.equal(textOf($(road(), '.dl-rm')), 'Remove?');
+  assert($(road(), '.dl-rm').classList.contains('armed'));
+  assert.equal(links.size, 2, 'not yet');
+  await sleep(3700);
+  assert.equal(textOf($(road(), '.dl-rm')), 'Remove');
+  $(road(), '.dl-rm').click();
+  $(road(), '.dl-rm').click();
+  assert.equal(links.size, 1);
+  assert.equal(links.get(ROAD), null);
+  assert.match(toastsOf(app), /Removed “Car songs” from your saved links/);
+  cards = $$(sheetOf(app), '.dl-row');
+  assert.deepEqual(cards.map((c) => c.dataset.id), [SONG]);
+  // the quick rows follow at once
+  app.ui.sheets.back();
+  assert.equal($$(sheetOf(app), '.add-saved-row').length, 1);
+  assert.equal(textOf($(sheetOf(app), '.add-saved-all')).trim(), 'All saved links (1)');
+  // Import again: the sheet closes, the import runs with the bar
+  $(sheetOf(app), '.add-saved-all').click();
+  $($$(sheetOf(app), '.dl-row')[0], '.dl-go').click();
+  assert.equal($(app.root, '.sheet-layer').hidden, true);
+  assert.equal(drive.pending.args[0], `https://drive.google.com/file/d/${SONG}/view`);
+  await sleep(40);
+  assert.equal(textOf($(app.root, '.import-bar .ib-detail')), 'Getting “Midnight Signal”…');
+  // while it runs, a second Import again explains inside the sheet
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-saved-all').click();
+  $($$(sheetOf(app), '.dl-row')[0], '.dl-go').click();
+  assert.equal(sheetOf(app).dataset.sheet, 'drive-link');
+  assert.match(textOf($(sheetOf(app), '.dl-error')), /Another import is still running/);
+  drive.pending.resolve([]);
+  await sleep(40);
+  // Forget all saved links: asks first; afterwards the section and the quick rows are gone
+  $(sheetOf(app), '.dl-forget').click();
+  await sleep(10);
+  const dlg = $(app.root, '.dialog-layer');
+  assert.match(textOf(dlg), /Forget all saved links\?/);
+  buttonByText(dlg, 'Forget links').click();
+  await sleep(20);
+  assert.equal(links.size, 0);
+  assert.equal($(sheetOf(app), '.dl-saved').hidden, true);
+  assert.match(toastsOf(app), /Saved links forgotten/);
+  app.ui.sheets.back();
+  assert.equal($(sheetOf(app), '.add-saved').hidden, true);
+  app.ui.sheets.close();
+  // another tab saves a link while the sheet is open: it shows up
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-link').click();
+  links.save({ id: ROAD, kind: 'folder', name: 'From the other tab', songCount: 4 });
+  assert.equal($(sheetOf(app), '.dl-saved').hidden, false);
+  assert.equal(textOf($(sheetOf(app), '.dl-name')), 'From the other tab');
+  app.ui.destroy();
+  // Drive links not set up: no quick rows even with saved links; Help explains where they are
+  const app2 = makeApp(360, 560, { drive: new FakeDrive({ configured: false }) });
+  app2.links.save({ id: ROAD, kind: 'folder', name: 'Road Trip', songCount: 9 });
+  await startAudio(app2);
+  app2.ui.openAddMusic();
+  assert.equal($(sheetOf(app2), '.add-saved').hidden, true);
+  app2.ui.openMenu();
+  rowByLabel(sheetOf(app2), 'Help').click();
+  assert.match(textOf(sheetOf(app2)), /Drive links you import are remembered on this device \(Add music > Paste a Google Drive link > Saved links\)/);
+  assert.match(textOf(sheetOf(app2)), /clearing the browser’s site data removes them/);
+  app2.ui.destroy();
+  // a build without the store: no quick rows, no section, imports still work
+  const app3 = makeApp(360, 560, { drive: new FakeDrive(), links: null });
+  await startAudio(app3);
+  app3.ui.openAddMusic();
+  assert.equal($(sheetOf(app3), '.add-saved').hidden, true);
+  $(sheetOf(app3), '.add-link').click();
+  assert.equal($(sheetOf(app3), '.dl-saved').hidden, true);
+  pasteLink(app3, `https://drive.google.com/drive/folders/${ROAD}`);
+  app3.drive.pending.args[1].onInfo({ id: ROAD, kind: 'folder', name: 'Road Trip', songCount: 1 });
+  app3.drive.pending.resolve([roadSong(7)]);
+  await sleep(80);
+  assert.match(toastsOf(app3), /“Road Trip” · 1 new song added/);
+  app3.ui.destroy();
+  sheet = null;
+});
+
+/**
+ * The Drive API for a real GoogleDriveSource (public links, API key only): files.get by id, one folder listing
+ * page, media by id. Records every request; `firstMedia` holds what `onFirstMedia()` saw at the first download.
+ */
+function driveApiStub({ meta = {}, files = [], onFirstMedia = () => null } = {}) {
+  const log = { calls: [], media: [], firstMedia: undefined };
+  const media = new Map(files.map((f, i) => [f.id, new Uint8Array(200 + i).fill(7)]));
+  const notFound = () => Response.json({ error: { code: 404, errors: [{ reason: 'notFound' }] } }, { status: 404 });
+  const fetch = async (url, init = {}) => {
+    const u = String(url);
+    log.calls.push({ url: u, headers: { ...(init.headers || {}) } });
+    const m = /\/drive\/v3\/files(?:\/([^?]+))?\?(.*)$/.exec(u);
+    if (!m) throw new TypeError('Failed to fetch');
+    const id = m[1] ? decodeURIComponent(m[1]) : '';
+    if (id && /(^|&)alt=media(&|$)/.test(m[2])) {
+      if (log.firstMedia === undefined) log.firstMedia = onFirstMedia();
+      log.media.push(id);
+      const bytes = media.get(id);
+      if (!bytes) return notFound();
+      const headers = new Headers({ 'content-length': String(bytes.length), 'content-type': 'audio/mpeg' });
+      return { ok: true, status: 200, body: null, headers, arrayBuffer: async () => bytes.slice().buffer };
+    }
+    if (id) return meta[id] ? Response.json(meta[id]) : notFound();
+    return Response.json({ files });
+  };
+  return { fetch, log };
+}
+
+/** A real GoogleDriveSource with only the API key (links work, no sign-in, no Google scripts). */
+function realDrive(api) {
+  return new GoogleDriveSource({ config: { google: { apiKey: 'AIzaTESTKEY' } }, library: null, deps: {
+    global: {}, document: null, fetch: api.fetch, storage: memStore(), location: { origin: 'https://ranama.github.io' },
+    loadScript: () => Promise.reject(new Error('no scripts in this test')),
+  } });
+}
+
+async function until(cond, ms = 3000) {
+  const t0 = Date.now();
+  while (!cond()) {
+    if (Date.now() - t0 > ms) return false;
+    await sleep(10);
+  }
+  return true;
+}
+
+test('saved Drive links, real Google Drive source: saved after the lookup, Import again downloads nothing, ' +
+  'the resource key, the 60-song limit, blocked storage', async () => {
+  const songs = (prefix, n) => Array.from({ length: n }, (_, i) => ({
+    id: `1${prefix}Song${String(i).padStart(3, '0')}xxxxxxxx`, name: `${prefix} ${String(i + 1).padStart(2, '0')}.mp3`,
+    mimeType: 'audio/mpeg', size: String(200 + i), modifiedTime: '2026-01-02T10:00:00.000Z', resourceKey: `0-s${i}`,
+  }));
+  const road = songs('Road', 3);
+  let app = null;
+  const api = driveApiStub({
+    meta: { [ROAD]: { id: ROAD, name: 'Road Trip', mimeType: 'application/vnd.google-apps.folder', resourceKey: '0-FK' } },
+    files: road,
+    onFirstMedia: () => app.links.size,
+  });
+  const drive = realDrive(api);
+  app = makeApp(360, 560, { drive });
+  drive.library = app.library; // the source looks for songs it already has in the app's library
+  const { links, library } = app;
+  await startAudio(app);
+  // paste a folder link with a resource key: the link is saved as soon as Drive says what it is (before the songs)
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-link').click();
+  pasteLink(app, `https://drive.google.com/drive/folders/${ROAD}?resourcekey=0-FK&usp=sharing`);
+  assert(await until(() => /Road Trip/.test(toastsOf(app))), toastsOf(app));
+  assert.equal(api.log.firstMedia, 1, 'saved before the first download');
+  assert.equal(api.log.media.length, 3);
+  const saved = links.get(ROAD);
+  assert.equal(saved.url, `https://drive.google.com/drive/folders/${ROAD}?resourcekey=0-FK`);
+  assert.equal(saved.name, 'Road Trip');
+  assert.equal(saved.songCount, 3);
+  assert.match(toastsOf(app), /“Road Trip” · 3 new songs added · 3 queued, loading on deck A/);
+  assert.equal(library.list().filter((e) => !e.demo).length, 3);
+  // Import again from Add music: the same folder with its resource key, and nothing is downloaded again
+  const before = api.log.calls.length;
+  const firstTime = saved.lastImportedAt;
+  app.ui.openAddMusic();
+  $($$(sheetOf(app), '.add-saved-row')[0], '.add-saved-go').click();
+  assert(await until(() => /no new songs/.test(toastsOf(app))), toastsOf(app));
+  const again = api.log.calls.slice(before);
+  assert.equal(again.length, 2, 'only the folder lookup and its listing');
+  for (const c of again) assert.equal(c.headers['X-Goog-Drive-Resource-Keys'], `${ROAD}/0-FK`, 'the resource key goes along');
+  assert.equal(api.log.media.length, 3, 'no song downloaded again');
+  assert.match(toastsOf(app), /“Road Trip” · no new songs, all 3 are already in your library · all already in the set list/); // still waiting in the set list: not queued twice
+  assert.equal(library.list().filter((e) => !e.demo).length, 3);
+  assert.equal(links.size, 1);
+  assert(links.get(ROAD).lastImportedAt > firstTime, 'marked as used again');
+  // the note on the link sheet: nothing about storage while it works
+  app.ui.openAddMusic();
+  $(sheetOf(app), '.add-link').click();
+  assert.match(textOf($(sheetOf(app), '.dl-note')), /^Links you imported on this device/);
+  assert(!/this visit/.test(textOf($(sheetOf(app), '.dl-note'))));
+  app.ui.destroy();
+
+  // a big folder while the browser blocks storage: the import works, the 60-song notice still shows, the link
+  // lasts for this visit and the Saved links note says so
+  const BIG = '1BigFolder_000000000000000';
+  const big = songs('Big', LIBRARY_CAP + 2);
+  const bigMeta = { id: BIG, name: 'Big Folder', mimeType: 'application/vnd.google-apps.folder' };
+  const api2 = driveApiStub({ meta: { [BIG]: bigMeta }, files: big });
+  const blocked = { getItem() {
+    throw new Error('SecurityError');
+  }, setItem() {
+    throw new Error('QuotaExceededError');
+  }, removeItem() {
+    throw new Error('SecurityError');
+  } };
+  const drive2 = realDrive(api2);
+  const app2 = makeApp(360, 560, { drive: drive2, links: new SavedDriveLinks({ storage: blocked, events: null }) });
+  drive2.library = app2.library;
+  await startAudio(app2);
+  app2.ui.openAddMusic();
+  $(sheetOf(app2), '.add-link').click();
+  pasteLink(app2, `https://drive.google.com/drive/folders/${BIG}`);
+  assert(await until(() => /Big Folder/.test(toastsOf(app2)), 8000), toastsOf(app2));
+  assert.equal(api2.log.media.length, LIBRARY_CAP);
+  assert.match(toastsOf(app2), new RegExp(`That folder has ${LIBRARY_CAP + 2} songs\\. TwinSpin imported the first ${LIBRARY_CAP}`));
+  assert.match(toastsOf(app2), new RegExp(`“Big Folder” · ${LIBRARY_CAP} new songs added · ${LIBRARY_CAP} queued`));
+  assert.equal(app2.links.persistent, false);
+  assert.equal(app2.links.get(BIG).songCount, LIBRARY_CAP + 2);
+  app2.ui.openAddMusic();
+  $(sheetOf(app2), '.add-link').click();
+  assert.match(textOf($(sheetOf(app2), '.dl-note')), /blocks storage for TwinSpin, so they are kept for this visit only/);
+  app2.ui.destroy();
 });
 
 test('no errors were logged', () => {

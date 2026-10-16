@@ -74,14 +74,19 @@ export class TrackLoader {
   /**
    * "Add music" / a drop outside the decks: save to the library, append the songs to the end of the set list,
    * and load the first song into an empty deck (not while Auto Mix is on: it loads the decks itself).
+   * `describe({ entries, queued, deck })` may word the toast itself (a Drive link import says what was new);
+   * it returns '' to keep the usual one. Resolves with the library entries once they are saved.
+   * @param {File[]} files
+   * @param {{ describe?: (r: { entries: object[], queued: number, deck: number }) => string }} [opts]
+   * @returns {Promise<object[]>|undefined}
    */
-  addFiles(files) {
+  addFiles(files, { describe = null } = {}) {
     const list = Array.from(files || []).filter(Boolean);
-    if (!list.length) return;
+    if (!list.length) return undefined;
     const app = this.app;
     const songs = list.filter(looksLikeAudio);
     const addP = this._addToLibrary(list);
-    if (!songs.length) return; // the library says what was skipped
+    if (!songs.length) return addP; // the library says what was skipped
     const toSetList = !!app.playlist;
     let loadedOn = -1;
     if (app.engine && app.engine.ready && !(app.automix && app.automix.enabled)) {
@@ -102,14 +107,34 @@ export class TrackLoader {
         });
       }
     }
-    addP.then((entries) => {
+    return addP.then((entries) => {
       const n = entries.length || songs.length;
       const what = n === 1 ? `“${songTitle(entries[0] || { fileName: songs[0].name })}”` : `${n} songs`;
       let added = 0;
-      if (toSetList && entries.length) added = app.addToSetList(entries, { quiet: true });
+      let waiting = 0;
+      if (toSetList && entries.length) {
+        // songs still waiting in the set list (the current one and everything after it) are not queued twice, so
+        // importing a saved Drive link again does not fill the queue with copies
+        const pl = app.playlist;
+        const items = pl && Array.isArray(pl.items) ? pl.items : [];
+        const from = Math.max(0, Number.isFinite(pl && pl.currentIndex) ? pl.currentIndex : 0);
+        const queuedIds = new Set(items.slice(from).filter((it) => it && it.kind === 'library').map((it) => it.id));
+        const fresh = entries.filter((e) => !(e && queuedIds.has(e.id)));
+        waiting = entries.length - fresh.length;
+        if (fresh.length) added = app.addToSetList(fresh, { quiet: true });
+      }
       const where = loadedOn >= 0 ? `, loading on deck ${loadedOn ? 'B' : 'A'}` : '';
-      const sl = added ? ' to your songs and the set list' : '';
-      app.toast(`Added ${what}${sl}${where}`, { kind: 'ok' });
+      const sl = added ? ' to your songs and the set list' : waiting ? ' (already in the set list)' : '';
+      let text = '';
+      if (typeof describe === 'function') {
+        try {
+          text = describe({ entries, queued: added, waiting, deck: loadedOn }) || '';
+        } catch (err) {
+          console.warn('[TwinSpin] import toast failed', err);
+        }
+      }
+      app.toast(text || `Added ${what}${sl}${where}`, { kind: 'ok' });
+      return entries;
     });
   }
 

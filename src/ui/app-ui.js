@@ -54,11 +54,13 @@ const INDICATOR_EVERY = 6;
 export class AppUI {
   /**
    * @param {{root:HTMLElement, engine:object, decks:object[], sync:object, settings:object, library:object,
-   *          playlist?:object, automix?:object, player?:object, sources?:{gdrive?:object, server?:object}}} deps
+   *          playlist?:object, automix?:object, player?:object,
+   *          sources?:{gdrive?:object, server?:object, driveLinks?:object}}} deps
    *          playlist / automix / player:
    *          src/deck/playlist.js, automix.js, player.js (optional: without them the set list, Auto Mix and
    *          player controls stay hidden; the player needs the other two); sources: src/sources/gdrive.js
-   *          GoogleDriveSource and subsonic.js MusicServerSource (optional: the Add music sheet explains)
+   *          GoogleDriveSource, subsonic.js MusicServerSource and drive-links.js SavedDriveLinks (optional: the
+   *          Add music sheet explains; without SavedDriveLinks no links are remembered)
    */
   constructor({ root, engine, decks, sync, settings, library, playlist = null, automix = null, player = null, sources = null }) {
     this.root = root;
@@ -70,7 +72,8 @@ export class AppUI {
     this.playlist = playlist || null;
     this.automix = automix || null;
     this.player = this.playlist && this.automix && player ? player : null;
-    this.sources = { gdrive: (sources && sources.gdrive) || null, server: (sources && sources.server) || null };
+    this.sources = { gdrive: (sources && sources.gdrive) || null, server: (sources && sources.server) || null,
+      driveLinks: (sources && sources.driveLinks) || null };
     this.html = document.documentElement;
     this._amRow = false;
 
@@ -784,9 +787,9 @@ export class AppUI {
     return this.loader.loadFiles(index, files);
   }
 
-  /** Add music > This device, a Google Drive import, or a drop outside the decks. */
-  addFiles(files) {
-    return this.loader.addFiles(files);
+  /** Add music > This device, a Google Drive import, or a drop outside the decks (opts: TrackLoader.addFiles). */
+  addFiles(files, opts) {
+    return this.loader.addFiles(files, opts);
   }
 
   /** A library row's A / B button. */

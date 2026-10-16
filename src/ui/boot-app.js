@@ -1,11 +1,13 @@
 // DJ app wiring: Settings, AudioEngine, Library, Deck A/B, SyncController, Playlist (the set list = the queue),
-// AutoMix, Player (the music player facade), the song sources (GoogleDriveSource, MusicServerSource) and AppUI
-// (contract section 1, docs/AUTOMIX.md section 5, docs/PLAYER.md sections 4-5, docs/SOURCES.md sections 3-4).
+// AutoMix, Player (the music player facade), the song sources (GoogleDriveSource, MusicServerSource, the saved
+// Drive links) and AppUI (contract section 1, docs/AUTOMIX.md section 5, docs/PLAYER.md sections 4-5,
+// docs/SOURCES.md sections 3-4).
 // src/main.js loads this module with ONE dynamic import (so the second-device receiver page never downloads the
 // DJ engine, and a module that fails to load shows a readable message instead of a blank page). Every import
 // in the DJ module graph from here on is static. No side effects at import time.
 //   const app = startApp(document.getElementById('app'));
-//   // { settings, engine, library, decks, sync, playlist, automix, player, sources: { gdrive, server }, ui }
+//   // { settings, engine, library, decks, sync, playlist, automix, player, sources: { gdrive, server, driveLinks },
+//   //   ui }
 // Screenshot mode (?shot=<name>, for the README pictures) is at the end of this file; without ?shot it never runs.
 
 import { env, config } from '../core/env.js';
@@ -19,6 +21,7 @@ import { AutoMix } from '../deck/automix.js';
 import { Player } from '../deck/player.js';
 import { GoogleDriveSource } from '../sources/gdrive.js';
 import { MusicServerSource } from '../sources/subsonic.js';
+import { SavedDriveLinks } from '../sources/drive-links.js';
 import { AppUI } from './app-ui.js';
 import { waitFor } from './track-loader.js';
 
@@ -29,7 +32,8 @@ import { waitFor } from './track-loader.js';
  * @param {HTMLElement} root
  * @returns {{settings:Settings, engine:AudioEngine, library:Library, decks:Deck[], sync:SyncController,
  *   playlist:Playlist|null, automix:AutoMix|null, player:Player|null,
- *   sources:{gdrive:GoogleDriveSource|null, server:MusicServerSource|null}, ui:AppUI}}
+ *   sources:{gdrive:GoogleDriveSource|null, server:MusicServerSource|null, driveLinks:SavedDriveLinks|null},
+ *   ui:AppUI}}
  */
 export function startApp(root) {
   const shot = shotName();
@@ -93,16 +97,22 @@ export function startApp(root) {
 }
 
 /**
- * Build the song sources. A screenshot scene gets none (no remembered server, no Google scripts in the picture).
- * @returns {{gdrive: GoogleDriveSource|null, server: MusicServerSource|null}}
+ * Build the song sources and the saved Drive links. A screenshot scene gets none (no remembered server, no
+ * Google scripts and no saved links in the picture).
+ * @returns {{gdrive: GoogleDriveSource|null, server: MusicServerSource|null, driveLinks: SavedDriveLinks|null}}
  */
 function makeSources({ settings, library, shot }) {
-  const sources = { gdrive: null, server: null };
+  const sources = { gdrive: null, server: null, driveLinks: null };
   if (shot) return sources;
   try {
     sources.gdrive = new GoogleDriveSource({ config: (config && config.google) || {}, library });
   } catch (err) {
     console.error('[TwinSpin] Google Drive unavailable', err);
+  }
+  try {
+    sources.driveLinks = new SavedDriveLinks(); // localStorage 'twinspin.driveLinks.v1', synced across tabs
+  } catch (err) {
+    console.error('[TwinSpin] saved Drive links unavailable', err);
   }
   try {
     sources.server = new MusicServerSource({ settings, library });

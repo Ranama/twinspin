@@ -96,6 +96,9 @@ New origins can take from 5 minutes to a few hours before Google accepts them.
 
 1. Menu (☰) > **APIs & Services** > **Credentials** > **Create credentials** > **API key**.
 2. The console asks for at least one API restriction: choose **Google Picker API** and **Google Drive API**.
+   The list only shows APIs that are **enabled in this project**. If Google Drive API is missing, it is not enabled
+   here: do step 2 again (Library > Google Drive API > **Enable**, with this project selected at the top), then come
+   back, open the key and tick it under API restrictions.
 3. Open the new key (click its name) to finish the restrictions:
    * **Application restrictions:** **Websites**, then **Add** each of these:
      * `https://ranama.github.io/*`

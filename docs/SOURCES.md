@@ -111,7 +111,9 @@ strips headers), mixed content (http address from the https app).
   **Music server / NAS**, **Paste a Drive link**; and a collapsible "Other ways" hint card: iPhone Files app (Google
   Drive, Synology Drive, Connect to Server/SMB), Android system picker (Drive) and CIFS Documents Provider, computer
   network drive. Drive button when not configured: a short explanation and a link to the setup guide
-  (`docs/GOOGLE_DRIVE.md` on GitHub). Import progress (n of m, MB) with cancel.
+  (`docs/GOOGLE_DRIVE.md` on GitHub). Import progress (n of m, MB) with cancel. A fifth option, **Songs from Suno**
+  (`src/ui/sheets/suno-sheet.js`), explains how to download your own Suno songs (Suno has no public API) and offers
+  the user's playlist helper script `extras/suno-playlist-downloader.js` for the browser console on suno.com.
 * **Music server browser** (sheet/page in all layouts, phone-first): connect form (address, user, password, "Remember
   on this device"), then tabs Artists / Albums / Playlists / Search, album and playlist views with cover art, song rows
   with Play now / Play next / Add to queue / Load A / Load B (reuse the Songs row action sheet), "Add all" for an album

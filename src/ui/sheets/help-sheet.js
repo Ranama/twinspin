@@ -1,6 +1,6 @@
 // Help sheet: a plain-language guide to TwinSpin (quick start, decks, records, CUE vs headphones, SYNC, mixer,
-// Auto Mix and the set list, the music player, music from Google Drive or a NAS, FX and loops, outputs for this
-// kind of device, keyboard shortcuts, troubleshooting). Static content.
+// Auto Mix and the set list, the music player, music from Google Drive or a NAS, songs from Suno, FX and loops,
+// outputs for this kind of device, keyboard shortcuts, troubleshooting). Static content.
 //   host.push(helpSheet(app));
 
 import { h, icon, setKids } from '../dom.js';
@@ -121,6 +121,8 @@ export function helpSheet(app) {
             h('a.src-link', { href: GUIDES.drive, target: '_blank', rel: 'noopener', text: 'Google Drive' }), h('span', { text: ' · ' }),
             h('a.src-link', { href: GUIDES.nas, target: '_blank', rel: 'noopener', text: 'Synology NAS' }), h('span', { text: ' · ' }),
             h('a.src-link', { href: GUIDES.privacy, target: '_blank', rel: 'noopener', text: 'Privacy' }))),
+        topic('Songs from Suno', 'songs',
+          'Made songs on Suno? Download them from Suno first, then add them like any other song. Add music > Songs from Suno shows how: one song at a time with Suno’s own Download, or a whole playlist at once on a computer, and how to get them to your phone through Google Drive.'),
         topic('Effects and loops', 'fx',
           list([
             'Tap an effect pad to switch it on, tap again to switch it off. Hold a pad to use it only while you hold.',

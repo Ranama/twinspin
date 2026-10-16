@@ -11,7 +11,9 @@
 // onInfo after a link import, failed links not saved, the quick rows in Add music, the Saved links cards with
 // Import again / Copy link / Rename / Remove / Forget all, the result toasts; end to end with the real
 // GoogleDriveSource on a stubbed Drive API: Import again downloads nothing, keeps the resource key, the 60-song
-// notice, blocked storage), and a clean error log.
+// notice, blocked storage), Songs from Suno (the sheet, the helper script fetched only when it opens, Copy script
+// through the clipboard or the selected box, Download script, the Drive link shortcut, a script that cannot load),
+// and a clean error log.
 
 import * as T from '../src/ui/sources-text.js';
 import { installFakeDom, FakeEvent, Element, FakeDocument } from './helpers/fake-dom.js';
@@ -448,7 +450,7 @@ async function connect(app, { url = FIXTURE, user = 'dj', pass = 'secret-pw', re
   await sleep(120);
 }
 
-test('Add music sheet: four ways in, Other ways, This device adds through the file input', async () => {
+test('Add music sheet: five ways in, Other ways, This device adds through the file input', async () => {
   const app = makeApp(360, 560, { drive: new FakeDrive({ configured: false }) });
   await startAudio(app);
   $(app.root, '.tab-songs').click();
@@ -461,7 +463,7 @@ test('Add music sheet: four ways in, Other ways, This device adds through the fi
   assert.equal(sheet.dataset.sheet, 'add-music');
   assert.equal(textOf($(sheet, '.sheet-title')), 'Add music');
   assert.deepEqual($$(sheet, '.add-opt .row-label').map(textOf),
-    ['This device', 'Google Drive', 'Music server / NAS', 'Paste a Google Drive link']);
+    ['This device', 'Google Drive', 'Music server / NAS', 'Paste a Google Drive link', 'Songs from Suno']);
   assert.equal($(sheet, '.add-device').tagName, 'LABEL', 'the system picker opens in the same tap');
   // Other ways: Android first on this (Android) phone, the guides linked
   const ways = $$(sheet, '.add-way');
@@ -982,6 +984,9 @@ test('Settings > Google Drive, Help, the menu, the player empty state and all la
   rowByLabel(sheetOf(app), 'Help').click();
   sheet = sheetOf(app);
   assert($$(sheet, '.help-h').some((x) => textOf(x) === 'Your music from Google Drive or your NAS'));
+  const sunoHelp = $$(sheet, '.help-sec').find((s) => textOf($(s, '.help-h')) === 'Songs from Suno');
+  assert(sunoHelp, 'help: Songs from Suno');
+  assert.match(textOf(sunoHelp), /Add music > Songs from Suno/);
   // Menu > Add music
   app.ui.openMenu();
   rowByLabel(sheetOf(app), 'Add music').click();
@@ -1413,6 +1418,242 @@ test('saved Drive links, real Google Drive source: saved after the lookup, Impor
   $(sheetOf(app2), '.add-link').click();
   assert.match(textOf($(sheetOf(app2), '.dl-note')), /blocks storage for TwinSpin, so they are kept for this visit only/);
   app2.ui.destroy();
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Songs from Suno (src/ui/sheets/suno-sheet.js): the helper script extras/suno-playlist-downloader.js
+
+const SUNO_SCRIPT = new URL('../extras/suno-playlist-downloader.js', import.meta.url);
+
+/** Open Add music > Songs from Suno; returns the sheet. */
+function openSuno(app) {
+  app.ui.openAddMusic();
+  const opt = $(sheetOf(app), '.add-suno');
+  assert(opt, 'the Songs from Suno option');
+  opt.click();
+  const sheet = sheetOf(app);
+  assert.equal(sheet.dataset.sheet, 'suno');
+  return sheet;
+}
+
+test('Songs from Suno: the option opens the sheet, the script loads, Copy script, the select fallback, ' +
+  'Download script, the Drive link shortcut, This device', async () => {
+  const want = await (await realFetch(SUNO_SCRIPT)).text();
+  assert(want.length > 1000 && /Suno Playlist Downloader/.test(want), 'the helper script is in extras/');
+  const fetched = [];
+  const origFetch = G.fetch;
+  G.fetch = (url, init) => {
+    fetched.push(String(url));
+    return origFetch(url, init);
+  };
+  try {
+    const app = makeApp(360, 560, { drive: new FakeDrive() });
+    await startAudio(app);
+    app.ui.openAddMusic();
+    const opt = $(sheetOf(app), '.add-suno');
+    assert.equal(textOf($(opt, '.row-label')), 'Songs from Suno');
+    assert.equal(textOf($(opt, '.row-detail')), 'Download your Suno songs, then add them here');
+    assert.equal(fetched.filter((u) => /suno-playlist-downloader/.test(u)).length, 0, 'nothing loads before the sheet opens');
+    const sheet = openSuno(app);
+    assert.equal(textOf($(sheet, '.sheet-title')), 'Songs from Suno');
+    assert.equal($(sheet, '.sheet-back').hidden, false, 'Back returns to Add music');
+    assert.deepEqual($$(sheet, '.sheet-h').map(textOf),
+      ['One song at a time (phone or computer)', 'A whole playlist at once (computer)', 'Get them into TwinSpin']);
+    const secs = $$(sheet, '.sheet-sec');
+    const one = secs.find((s) => textOf($(s, '.sheet-h')) === 'One song at a time (phone or computer)');
+    assert.match(textOf(one), /⋯ menu > Download > MP3 \(WAV on paid plans\)/);
+    assert.match(textOf(one), /Add music > This device/);
+    assert.match(textOf(one), /download limit.*non-commercial use only.*Check your plan/);
+    const pl = secs.find((s) => textOf($(s, '.sheet-h')) === 'A whole playlist at once (computer)');
+    assert.match(textOf(pl), /downloads every song you made in a playlist/);
+    assert.deepEqual($$(pl, '.suno-steps kbd').map(textOf), ['Ctrl+Shift+J', 'Ctrl+Shift+K', 'Cmd+Option+J', 'Cmd+Option+K']);
+    assert.deepEqual($$(pl, '.suno-steps code').map(textOf), ['/playlist/', 'allow pasting']);
+    // the steps in the order they are done; the console keys for each browser (Firefox's Ctrl+Shift+J would open
+    // its Browser Console, not the page's console); allow pasting after the first paste, which is when it is asked
+    const stepTexts = $$(pl, '.suno-steps li').map(textOf);
+    assert.equal(stepTexts.length, 7);
+    assert.match(stepTexts[0], /^On a computer, open suno\.com in Chrome, Edge or Firefox and sign in\./);
+    assert.match(stepTexts[1], /\/playlist\//);
+    assert.equal(stepTexts[2], 'Open the browser console. Windows or Linux: Ctrl+Shift+J in Chrome or Edge, ' +
+      'Ctrl+Shift+K in Firefox. Mac: Cmd+Option+J in Chrome or Edge, Cmd+Option+K in Firefox.');
+    assert.match(stepTexts[3], /Copy script below\. Paste it into the console on suno\.com and press Enter\./);
+    assert.match(stepTexts[4], /^The first time, the browser may ask you to type allow pasting\. Do what it says/);
+    assert.match(stepTexts[5], /Keep MP3 ticked \(MP3 is enough for TwinSpin\), leave “Number files in playlist order” ticked and click Download\./);
+    assert.match(stepTexts[6], /allow multiple downloads\. The songs land in your Downloads folder\./);
+    assert.match(textOf($(pl, '.suno-phone')), /^Phones have no console/);
+    // the note is honest about the risk: not Suno's, can stop working, Suno's terms, the account, paid gigs
+    const caution = $(pl, '.suno-note');
+    assert.equal(caution.getAttribute('role'), 'note');
+    assert.match(textOf(caution), /^This helper is not made by Suno\./);
+    assert.match(textOf(caution), /If it saves nothing, use Suno’s own Download\./);
+    assert.match(textOf(caution), /Suno’s terms do not allow bots, scraping or downloading in ways Suno did not make for that\./);
+    assert.match(textOf(caution), /break those terms, and Suno could act against your account\. Use it at your own risk\./);
+    assert.match(textOf(caution), /For paid gigs, use songs from Suno’s own Download on a paid plan\./);
+    assert.match(textOf(caution), /Only paste code you trust into a browser console/);
+    assert(!/\b(7|20|60) (lifetime|a month|downloads|per month)/.test(textOf(sheet)), 'no plan numbers: they change');
+    // the script loads when the sheet opens: Copy script waits for it
+    const copy = $(sheet, '.suno-copy');
+    assert.equal(copy.disabled, true, 'Copy script waits for the text');
+    assert.equal(textOf($(sheet, '.suno-status')), 'Getting the script…');
+    assert.equal($(sheet, '.suno-show').hidden, true);
+    assert(await until(() => !copy.disabled), 'the script loaded');
+    assert.deepEqual(fetched.filter((u) => /suno-playlist-downloader/.test(u)), [SUNO_SCRIPT.href]);
+    assert.equal(textOf($(sheet, '.suno-status')), '');
+    assert.equal($(sheet, '.suno-error').hidden, true);
+    const show = $(sheet, '.suno-show');
+    assert.equal(show.hidden, false);
+    assert.equal(textOf($(show, 'summary')), 'Show the script');
+    const box = $(show, 'textarea.suno-code');
+    assert.equal(box.value, want, 'the whole script, unchanged');
+    assert.equal(box.getAttribute('readonly'), '');
+    // Download script (.js): a plain same-origin link to the file, saved under its own name
+    const dl = $(sheet, 'a.suno-download');
+    assert.equal(dl.getAttribute('href'), SUNO_SCRIPT.href);
+    assert.equal(dl.getAttribute('download'), 'suno-playlist-downloader.js');
+    assert.equal(dl.getAttribute('target'), null);
+    assert.equal(textOf(dl), 'Download script (.js)');
+    // Copy script: the clipboard, called inside the tap with the fetched text
+    const copied = [];
+    G.navigator.clipboard = { writeText: async (t) => {
+      copied.push(t);
+    } };
+    copy.click();
+    assert.equal(copied.length, 1, 'writeText runs inside the click');
+    assert.equal(copied[0], want);
+    await sleep(10);
+    assert.match(textOf($(sheet, '.suno-status')), /^Copied\. Paste it into the console on suno\.com/);
+    assert.match(toastsOf(app), /Script copied/);
+    assert.notEqual(show.open, true, 'the box stays closed when copying worked');
+    // a clipboard that refuses: the script box opens with the text selected
+    const proto = Object.getPrototypeOf(box);
+    const selected = [];
+    proto.select = function select() {
+      selected.push(this);
+    };
+    proto.setSelectionRange = function setSelectionRange(a, b) {
+      this._range = [a, b];
+    };
+    try {
+      G.navigator.clipboard = { writeText: async () => {
+        throw new Error('NotAllowedError');
+      } };
+      copy.click();
+      await sleep(10);
+      assert.equal(show.open, true, 'Show the script opens');
+      assert.equal(G.document.activeElement, box, 'the box has the focus');
+      assert.deepEqual(selected, [box], 'its text is selected');
+      assert.deepEqual(box._range, [0, want.length]);
+      assert.match(textOf($(sheet, '.suno-status')), /did not let TwinSpin copy\. The script is selected below/);
+      // no clipboard at all (an http page, an older browser): the same, at once
+      delete G.navigator.clipboard;
+      show.open = false;
+      G.document.activeElement = G.document.body;
+      copy.click();
+      assert.equal(show.open, true);
+      assert.equal(G.document.activeElement, box);
+      assert.equal(selected.length, 2);
+    } finally {
+      delete proto.select;
+      delete proto.setSelectionRange;
+      delete G.navigator.clipboard;
+    }
+    // Get them into TwinSpin: Paste a Google Drive link opens the link sheet, Back returns here
+    const into = secs.find((s) => textOf($(s, '.sheet-h')) === 'Get them into TwinSpin');
+    assert.match(textOf(into), /New > Folder upload and choose that folder\. \(With Google Drive for desktop/);
+    assert.match(textOf(into), /“Anyone with the link”/);
+    assert.match(textOf(into), /Saved links/);
+    assert.equal($(into, '.sheet-note.warn'), null, 'Drive links are set up: no setup note');
+    $(into, '.suno-drive').click();
+    assert.equal(sheetOf(app).dataset.sheet, 'drive-link');
+    assert($(sheetOf(app), '[id=drive-link-input]'), 'the paste field');
+    app.ui.sheets.back();
+    assert.equal(sheetOf(app).dataset.sheet, 'suno');
+    // ... and Choose the songs adds the downloaded files like This device
+    await until(() => !$(sheetOf(app), '.suno-copy').disabled);
+    const pick = $(sheetOf(app), 'label.suno-files');
+    assert(pick, 'Choose the songs');
+    const input = $(pick, 'input');
+    input.files = [fakeFile('01 - Neon Tide [1a2b3c4d].mp3'), fakeFile('02 - Glass Rain [5e6f7a8b].mp3')];
+    input.dispatchEvent(new FakeEvent('change'));
+    await sleep(60);
+    assert.equal($(app.root, '.sheet-layer').hidden, true);
+    assert.equal(app.library.list().filter((e) => !e.demo).length, 2);
+    assert.equal(app.playlist.items.length, 2);
+    // closed before the script arrives: the late answer (the text, or a failure) touches nothing
+    for (const ok of [true, false]) {
+      let release = null;
+      const asked = [];
+      G.fetch = (url) => {
+        asked.push(String(url));
+        return new Promise((resolve, reject) => {
+          release = () => (ok ? resolve(origFetch(url)) : reject(new TypeError('Failed to fetch')));
+        });
+      };
+      const again = openSuno(app);
+      assert.deepEqual(asked, [SUNO_SCRIPT.href]);
+      const box2 = $(again, 'textarea.suno-code');
+      app.ui.sheets.close();
+      release();
+      await sleep(30);
+      assert.equal(box2.value || '', '', 'the late text is ignored');
+      assert.equal($(again, '.suno-copy').disabled, true);
+      assert.equal($(again, '.suno-show').hidden, true);
+      assert.equal($(again, '.suno-error').hidden, true, 'a late failure is ignored too');
+      assert.equal(textOf($(again, '.suno-status')), 'Getting the script…');
+    }
+    app.ui.destroy();
+  } finally {
+    G.fetch = origFetch;
+  }
+});
+
+test('Songs from Suno: the script address works under any base (GitHub Pages /twinspin/, localhost, a query)', async () => {
+  const { sunoScriptUrl, SUNO_SCRIPT_NAME } = await import('../src/ui/sheets/suno-sheet.js');
+  assert.equal(SUNO_SCRIPT_NAME, 'suno-playlist-downloader.js');
+  assert.equal(sunoScriptUrl(), SUNO_SCRIPT.href, 'next to the app: <root>/extras/');
+  assert.equal(sunoScriptUrl('https://ranama.github.io/twinspin/src/ui/sheets/suno-sheet.js'),
+    'https://ranama.github.io/twinspin/extras/suno-playlist-downloader.js');
+  assert.equal(sunoScriptUrl('http://localhost:8100/src/ui/sheets/suno-sheet.js?v=2'),
+    'http://localhost:8100/extras/suno-playlist-downloader.js');
+  assert.equal(sunoScriptUrl('https://abc.trycloudflare.com/src/ui/sheets/suno-sheet.js'),
+    'https://abc.trycloudflare.com/extras/suno-playlist-downloader.js');
+  // the published site and the service worker keep it at that same place
+  const sw = await (await realFetch(new URL('../sw.js', import.meta.url))).text();
+  assert(sw.includes("'./extras/suno-playlist-downloader.js',"), 'sw.js keeps the script offline');
+  assert(sw.includes("'./src/ui/sheets/suno-sheet.js',"), 'sw.js keeps the sheet offline');
+});
+
+test('Songs from Suno: a script that cannot load says so and links it on GitHub; no Drive links set up', async () => {
+  const origFetch = G.fetch;
+  try {
+    for (const fail of [() => Promise.reject(new TypeError('Failed to fetch')),
+      async () => ({ ok: false, status: 404, text: async () => 'Not found' })]) {
+      G.fetch = fail;
+      const app = makeApp(360, 560, { drive: new FakeDrive({ configured: false }) });
+      await startAudio(app);
+      const sheet = openSuno(app);
+      const err = $(sheet, '.suno-error');
+      assert(await until(() => !err.hidden), 'the error shows');
+      assert.equal(err.getAttribute('role'), 'alert');
+      assert.match(textOf(err), /^The script could not be loaded\. Check your connection and open this page again, or get it from GitHub/);
+      const link = $(err, 'a.src-link');
+      assert.equal(link.getAttribute('href'), T.GUIDES.sunoScript);
+      assert.equal(link.getAttribute('href'), 'https://github.com/Ranama/twinspin/blob/main/extras/suno-playlist-downloader.js');
+      assert.equal(link.getAttribute('target'), '_blank');
+      assert.equal(link.getAttribute('rel'), 'noopener');
+      assert.equal($(sheet, '.suno-copy').disabled, true, 'nothing to copy');
+      assert.equal($(sheet, '.suno-show').hidden, true, 'nothing to show');
+      assert.equal(textOf($(sheet, '.suno-status')), '');
+      // Drive links are not set up on this copy: the phone route says how to get by without them
+      assert.match(textOf($(sheet, '.sheet-note.warn')), /Drive links need the one-time Google setup/);
+      $(sheet, '.suno-drive').click();
+      assert.equal(sheetOf(app).dataset.sheet, 'drive-link');
+      assert.match(textOf(sheetOf(app)), /needs the one-time Google setup/);
+      app.ui.destroy();
+    }
+  } finally {
+    G.fetch = origFetch;
+  }
 });
 
 test('no errors were logged', () => {

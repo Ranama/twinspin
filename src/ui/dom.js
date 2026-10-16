@@ -87,6 +87,8 @@ const ICONS = {
   external: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5.5H4.5V6H10"/>',
   logout: '<path d="M10 4.5H5.5v15H10M15 8l4 4-4 4M19 12H9.5"/>',
   lock: '<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
+  copy: '<rect x="8.5" y="8.5" width="12" height="12" rx="2"/>' +
+    '<path d="M15.5 8.5V5a1.5 1.5 0 0 0-1.5-1.5H5A1.5 1.5 0 0 0 3.5 5v9A1.5 1.5 0 0 0 5 15.5h3.5"/>',
 };
 
 /** Inline SVG markup for an icon name (static, trusted strings only). */

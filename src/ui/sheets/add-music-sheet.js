@@ -1,8 +1,9 @@
-// Add music sheet (docs/SOURCES.md section 4): the four ways to bring songs in, as big rows: This device (the
+// Add music sheet (docs/SOURCES.md section 4): the ways to bring songs in, as big rows: This device (the
 // file input, opens the system picker in the same tap), Google Drive (Google's own picker; a short explanation and
-// the setup guide while it is not set up), Music server / NAS (the server browser) and Paste a Drive link (with up
-// to 3 saved links right under it, src/ui/saved-links.js); then a collapsible "Other ways" card: how the phone's
-// own file picker already reaches Google Drive and the NAS (iPhone Files app, Android system picker, CIFS
+// the setup guide while it is not set up), Music server / NAS (the server browser), Paste a Drive link (with up
+// to 3 saved links right under it, src/ui/saved-links.js) and Songs from Suno (how to download them from Suno,
+// incl. the playlist helper script, src/ui/sheets/suno-sheet.js); then a collapsible "Other ways" card: how the
+// phone's own file picker already reaches Google Drive and the NAS (iPhone Files app, Android system picker, CIFS
 // Documents Provider, a mapped network drive), current platform first. Opened by the Songs page's Add music
 // button, the player's empty state and the menu.
 //   app.sheets.open(addMusicSheet(app));  host.push(driveLinkSheet(app));
@@ -13,6 +14,7 @@ import { ACCEPT } from '../../audio/decode.js';
 import { env } from '../../core/env.js';
 import { otherWays, GUIDES } from '../sources-text.js';
 import { savedLinksSection, savedLinksQuick } from '../saved-links.js';
+import { sunoSheet } from './suno-sheet.js';
 
 /** One big option row: icon, label, detail, chevron. `tag` 'button' (default) or an element from fileLabel. */
 function optionKids(ico, label, detail) {
@@ -100,6 +102,10 @@ export function addMusicSheet(app) {
         'the link”. No sign-in.', () => host.push(driveLinkSheet(app)));
       const quick = savedLinksQuick(app, host, { openAll: () => host.push(driveLinkSheet(app)) });
 
+      // Songs from Suno: how to download them from Suno (one by one, or a playlist with the helper script)
+      const suno = option('add-suno', 'fx', 'Songs from Suno', 'Download your Suno songs, then add them here',
+        () => host.push(sunoSheet(app, { driveLinkSheet })));
+
       // Other ways: the phone's own file picker already reaches Drive and the NAS
       const ways = otherWays(env).map((w) => h('section.add-way', { dataset: { way: w.id } },
         h('h4.add-way-h', { text: w.title }), h('ul.help-list', {}, w.items.map((t) => h('li', { text: t })))));
@@ -111,7 +117,7 @@ export function addMusicSheet(app) {
         h('p.add-guides', {}, guideLink(GUIDES.nas, 'NAS guide'), guideLink(GUIDES.drive, 'Google Drive guide')));
 
       body.append(
-        section('', device, drive.el, driveInfo, srv.el, link.el, quick.el),
+        section('', device, drive.el, driveInfo, srv.el, link.el, quick.el, suno.el),
         section('', other),
         h('p.sheet-note.add-privacy', {}, h('span', { text: 'Songs stay on this device. TwinSpin only talks to the ' +
           'services you connect. ' }), h('a.src-link', { href: GUIDES.privacy, target: '_blank', rel: 'noopener', text: 'Privacy' })));

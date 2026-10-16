@@ -27,6 +27,12 @@ before loading your own music.
   playlists and search with cover art, play or queue songs, load them on a deck, **Save offline** for a set
   without Wi-Fi. Setup guides: [Google Drive](docs/GOOGLE_DRIVE.md), [Synology NAS](docs/SYNOLOGY.md); the phone's
   own file picker reaches both with no setup at all
+* **Songs from Suno**: **Add music > Songs from Suno** shows how to download your own Suno songs and add them:
+  one at a time with Suno's own Download, or a whole playlist at once on a computer with a small helper script
+  you paste into the browser console on suno.com ([extras/suno-playlist-downloader.js](extras/suno-playlist-downloader.js):
+  Copy script, Download script or read it in the app), then into TwinSpin from this device or, for your phone,
+  through a shared Google Drive folder. The helper is not made by Suno, and Suno's terms do not allow bots or
+  scraping: use it at your own risk (for paid gigs, use songs from Suno's own Download on a paid plan)
 * **Automatic BPM detection** with beat maps that follow songs whose tempo drifts, scrolling beat-marked
   waveforms, whole-song overview strips, tempo field with nudge buttons
 * **Mixer**: channel volume, 3-band EQ with kill, filter, crossfader (smooth or scratch cut), master volume, meters
@@ -266,6 +272,7 @@ src/library/                 the song list (IndexedDB)
 src/remote/                  second device over WebRTC (PeerJS, loaded only when used)
 src/ui/                      app UI, pages and sheets; src/ui/widgets/ = records, faders, knobs, waveforms
 icons/                       app icons (made by tools/make-icons.ps1)
+extras/                      files the app offers for download (the Suno playlist helper script, shipped as is)
 tests/                       *.test.js for JsCheck; tests/helpers/ = fake DOM and models
 tools/                       serve, phone-link, publish-web, make-icons, JsCheck
 docs/                        CONTRACT.md, AUTOMIX.md, CHANGES.md, DEPLOY.md, research notes, screenshots

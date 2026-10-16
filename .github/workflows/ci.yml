@@ -64,12 +64,12 @@ jobs:
         run: |
           export LC_ALL=C
           listed=$(sed -n '/^const SHELL = \[/,/^\];/p' sw.js | grep -o "'\./[^']*'" | tr -d "'" | sed 's#^\./##' | grep -v '^$' | sort -u || true)
-          shipped=$(git ls-files css src icons | grep -v -E '(^|/)\.|(^|/)(tests?|__tests__|spec)/|\.(test|spec)\.m?js$|\.(md|map|bak|orig|tmp|log|ps1|cmd|cs|psd|xcf)$' | sort -u || true)
+          shipped=$(git ls-files css src icons extras | grep -v -E '(^|/)\.|(^|/)(tests?|__tests__|spec)/|\.(test|spec)\.m?js$|\.(md|map|bak|orig|tmp|log|ps1|cmd|cs|psd|xcf)$' | sort -u || true)
           missing=$(comm -23 <(printf '%s\n' "$shipped") <(printf '%s\n' "$listed"))
           if [ -n "$missing" ]; then
             while IFS= read -r f; do
               echo "::warning file=sw.js::'./$f' is not in the SHELL list of sw.js (the published site adds it by itself; add it for the development copy)"
             done <<< "$missing"
           else
-            echo "sw.js lists every file of css/, src/ and icons/."
+            echo "sw.js lists every file of css/, src/, icons/ and extras/."
           fi

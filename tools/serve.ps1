@@ -86,7 +86,7 @@ function Resolve-Request([string]$UrlPath) {
 # reach the app itself, never the rest of the project folder (private notes, your test songs in tests\media, docs).
 # Cloudflare adds Cf-Connecting-Ip / Cf-Ray; other proxies add X-Forwarded-For.
 $PublicFiles = @('', 'index.html', 'config.js', 'manifest.webmanifest', 'sw.js', '404.html', 'build.txt')
-$PublicDirs = @('css/', 'src/', 'icons/')
+$PublicDirs = @('css/', 'src/', 'icons/', 'extras/')   # extras/: the Suno playlist script (Add music > Songs from Suno)
 function Test-ViaProxy($Req) {
   foreach ($h in @('Cf-Connecting-Ip', 'Cf-Ray', 'X-Forwarded-For', 'Forwarded')) { if ($Req.Headers[$h]) { return $true } }
   return $false

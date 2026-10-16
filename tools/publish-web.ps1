@@ -8,6 +8,8 @@
     * index.html, config.js, manifest.webmanifest, sw.js, privacy.html (+ any other local file index.html or the
       manifest uses)
     * css\**, src\** and icons\** (without tests, notes and hidden files)
+    * extras\** (files the app offers for download, without notes and hidden files): the Suno playlist helper
+      extras\suno-playlist-downloader.js, which Add music > Songs from Suno copies and links (it must exist)
     * NOT docs\, tests\ (also not the music-server test fixture tests\fixtures\), tools\, README.md or anything
       else that is for development only
   Then it:
@@ -17,7 +19,8 @@
       ?listen=CODE and #listen=CODE) and build.txt (build time, to see which version is live)
     * checks that every file index.html and the manifest refer to exists, and checks every JavaScript module of the
       site with tools\JsCheck (syntax, imports, exports, letter case), unless -SkipCheck; it refuses to finish a
-      broken site
+      broken site. extras\ is left out of that check: its scripts are classic scripts for other websites (the Suno
+      helper runs in the browser console on suno.com), never modules of this app
     * prints the file count and size
 
   -Zip   also writes <TwinSpin>\site.zip (index.html at the top level) for Netlify Drop or Cloudflare Pages.
@@ -326,11 +329,13 @@ foreach ($ref in $refs) {
 }
 try { [void]($manifestText | ConvertFrom-Json) } catch { $problems.Add("manifest.webmanifest is not valid JSON: $($_.Exception.Message)") }
 
-# css/**, src/**, icons/**: everything except tests, notes and hidden files.
-foreach ($dir in @('css', 'src', 'icons')) {
+# css/**, src/**, icons/**, extras/**: everything except tests, notes and hidden files.
+# extras/ holds files the app offers for download (Add music > Songs from Suno: the Suno playlist helper script).
+$ShippedDirs = @('css', 'src', 'icons', 'extras')
+foreach ($dir in $ShippedDirs) {
   $full = Join-Path $Root $dir
   if (-not (Test-Path -LiteralPath $full -PathType Container)) {
-    if ($dir -ne 'icons') { $problems.Add("the $dir\ folder is missing") }
+    if ($dir -eq 'css' -or $dir -eq 'src') { $problems.Add("the $dir\ folder is missing") }
     continue
   }
   foreach ($f in @(Get-ChildItem -LiteralPath $full -Recurse -File -Force)) {
@@ -339,12 +344,16 @@ foreach ($dir in @('css', 'src', 'icons')) {
     $plan[$rel] = $f.FullName
   }
 }
+# The Songs from Suno sheet copies and links this file: without it, its Copy script and Download buttons break.
+if (-not $plan.ContainsKey('extras/suno-playlist-downloader.js')) {
+  $problems.Add("'extras/suno-playlist-downloader.js' does not exist (Add music > Songs from Suno offers it)")
+}
 
 # What else is in the folder (for the summary).
 foreach ($item in @(Get-ChildItem -LiteralPath $Root -Force)) {
   if ($item.Name -eq 'site' -or $item.Name -eq 'site.zip') { continue }
   if ($item.PSIsContainer) {
-    if (@('css', 'src', 'icons') -notcontains $item.Name) { $skipped.Add("$($item.Name)/") }
+    if ($ShippedDirs -notcontains $item.Name) { $skipped.Add("$($item.Name)/") }
   } elseif (-not $plan.ContainsKey($item.Name)) { $skipped.Add($item.Name) }
 }
 
@@ -404,7 +413,7 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
   $r = Invoke-Quiet 'git' @('-C', $Root, 'rev-parse', '--short', 'HEAD')
   if ($r.Code -eq 0 -and $r.Out.Count -gt 0 -and $r.Out[0] -match '^[0-9a-f]+$') {
     $commit = $r.Out[0]
-    $d = Invoke-Quiet 'git' @('-C', $Root, 'status', '--porcelain', '--', 'index.html', 'config.js', 'sw.js', 'manifest.webmanifest', 'privacy.html', 'css', 'src', 'icons')
+    $d = Invoke-Quiet 'git' @('-C', $Root, 'status', '--porcelain', '--', 'index.html', 'config.js', 'sw.js', 'manifest.webmanifest', 'privacy.html', 'css', 'src', 'icons', 'extras')
     if ($d.Code -eq 0 -and $d.Out.Count -gt 0) { $commit += ' + uncommitted changes' }
   }
 }
@@ -426,7 +435,9 @@ if ($SkipCheck) {
 } else {
   Step 'Checking every JavaScript module of the site'
   $ps = (Get-Process -Id $PID).Path
-  $r = Invoke-Quiet $ps @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $JsCheck, 'check', $Site)
+  # extras\ is not checked: its scripts are classic scripts for other websites (the Suno helper runs in the browser
+  # console on suno.com), never imported by the app, and they are shipped exactly as they are.
+  $r = Invoke-Quiet $ps @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $JsCheck, 'check', $Site, '--exclude', 'extras')
   $summary = @($r.Out | Where-Object { $_ -match '^(OK|FAIL) ' } | Select-Object -Last 1)
   $fatal = @($r.Out | Where-Object { $_ -match 'SyntaxError|cannot resolve|points to a directory|letter case is ignored|does not provide an export|bare .* specifier' })
   if ($r.Code -eq 2 -or $summary.Count -eq 0) {

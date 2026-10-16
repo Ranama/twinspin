@@ -22,7 +22,7 @@ export function menuSheet(app) {
       });
       const set = navRow('gear', 'Settings', 'Tempo range, scratch, crossfader, screen', () => host.push(settingsSheet(app)));
       const help = navRow('help', 'Help', 'How everything works, in plain words', () => host.push(helpSheet(app)));
-      const add = navRow('plus', 'Add music', 'This device, Google Drive, music server / NAS', () => host.push(addMusicSheet(app)));
+      const add = navRow('plus', 'Add music', 'This device, Google Drive, music server / NAS, Suno', () => host.push(addMusicSheet(app)));
       const rows = [out.el, songs.el, add.el];
       if (app.player) {
         const player = navRow('player', 'Music player', 'The queue: play, shuffle, repeat, transitions', () => {

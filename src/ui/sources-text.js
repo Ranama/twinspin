@@ -9,11 +9,15 @@
 import { fmtBytes } from './format.js';
 import { fmtTime } from '../core/util.js';
 
-/** The setup guides on GitHub (the app links to them) and the privacy page next to the app. */
+/**
+ * The setup guides on GitHub (the app links to them), the privacy page next to the app, and the Suno playlist
+ * script on GitHub (Songs from Suno links it when the copy next to the app cannot be loaded).
+ */
 export const GUIDES = Object.freeze({
   drive: 'https://github.com/Ranama/twinspin/blob/main/docs/GOOGLE_DRIVE.md',
   nas: 'https://github.com/Ranama/twinspin/blob/main/docs/SYNOLOGY.md',
   privacy: 'privacy.html',
+  sunoScript: 'https://github.com/Ranama/twinspin/blob/main/extras/suno-playlist-downloader.js',
 });
 
 // ---- where a song comes from ------------------------------------------------------------------------------------

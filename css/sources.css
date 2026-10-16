@@ -1,8 +1,8 @@
 /* Song sources (docs/SOURCES.md section 4): the Add music sheet, the Google Drive link form and its saved links
    (quick rows in Add music, cards in the link sheet), the music server browser (connect form, tabs, album grid,
    song rows, album / playlist / artist pages), the import bar, the small cloud / server badges on song rows and
-   the deck chip while a song downloads. (The phone-sized Google Picker rules are injected by
-   src/sources/gdrive.js, PICKER_CSS.)
+   the deck chip while a song downloads, and the Songs from Suno sheet (steps, the note, the script box). (The
+   phone-sized Google Picker rules are injected by src/sources/gdrive.js, PICKER_CSS.)
    Tokens come from css/app.css. Text fields use 16 px text so iPhone Safari never zooms in on focus. */
 
 /* ------------------------------------------------------------------------------------------- Add music */
@@ -38,6 +38,7 @@
 .add-drive .add-opt-ico { color: #8ab4ff; }
 .add-server .add-opt-ico { color: var(--deck-b); }
 .add-link .add-opt-ico { color: var(--cue); }
+.add-suno .add-opt-ico { color: #ff8ad6; }
 
 label.add-opt:focus-visible {
   outline: 3px solid var(--focus);
@@ -1058,6 +1059,121 @@ label.add-opt:focus-visible {
   }
 }
 
+/* ------------------------------------------------------------------------------------- Songs from Suno */
+
+/* steps with keys (kbd, styled in app.css) and bits to type: short, so they never need to wrap */
+.suno-steps code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+
+.suno-steps kbd {
+  min-width: 0;
+  padding: 0 6px;
+}
+
+/* the calm note about the helper script: not Suno's, Suno's terms, paste only code you trust */
+.suno-note {
+  display: flex;
+  gap: 10px;
+  margin: 10px 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(var(--cue-rgb), 0.07);
+  border: 1px solid rgba(var(--cue-rgb), 0.35);
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.suno-note-ico {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  color: var(--cue);
+}
+
+.suno-note-main {
+  min-width: 0;
+}
+
+.suno-note p {
+  margin: 0;
+}
+
+.suno-note p + p {
+  margin-top: 8px;
+  color: var(--text);
+}
+
+/* Copy script (big), Download script, Choose the songs, Paste a Google Drive link: full width on a phone, side by
+   side where two fit (a 360 px phone has 324 px of sheet content: 2 x 200 px never fit there) */
+.suno-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+.suno-actions .btn {
+  flex: 1 1 200px;
+  min-height: 52px;
+  text-decoration: none;
+}
+
+.suno-actions .suno-copy {
+  min-height: 56px;
+}
+
+label.suno-files {
+  cursor: pointer;
+}
+
+label.suno-files:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.suno-status:empty {
+  margin: 0;
+}
+
+.suno-show {
+  margin-top: 6px;
+}
+
+/* the whole script: scrolls both ways, never wraps (lines stay as they are) */
+.suno-code {
+  display: block;
+  width: 100%;
+  height: 300px;
+  margin: 4px 0 6px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--well);
+  color: var(--dim);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
+  touch-action: pan-x pan-y;
+}
+
+/* touch screens: 16 px, so iPhone Safari never zooms in when the box gets the focus */
+@media (hover: none) and (pointer: coarse) {
+  .suno-code {
+    font-size: 16px;
+  }
+}
+
 /* -------------------------------------------------------------------------------------- outdoor contrast */
 
 :root[data-outdoor='1'] .add-opt-ico,
@@ -1065,7 +1181,9 @@ label.add-opt:focus-visible {
 :root[data-outdoor='1'] .src-input,
 :root[data-outdoor='1'] .import-bar,
 :root[data-outdoor='1'] .dl-row,
-:root[data-outdoor='1'] .dl-ico {
+:root[data-outdoor='1'] .dl-ico,
+:root[data-outdoor='1'] .suno-note,
+:root[data-outdoor='1'] .suno-code {
   border-width: 2px;
   border-color: var(--edge);
 }
@@ -1075,7 +1193,9 @@ label.add-opt:focus-visible {
 :root[data-outdoor='1'] .src-badge.src-server,
 :root[data-outdoor='1'] .add-saved-ico,
 :root[data-outdoor='1'] .add-saved-all,
-:root[data-outdoor='1'] .dl-ico {
+:root[data-outdoor='1'] .dl-ico,
+:root[data-outdoor='1'] .suno-note,
+:root[data-outdoor='1'] .suno-code {
   color: var(--text);
 }
 
